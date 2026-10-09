@@ -5,7 +5,7 @@
 
 FAKE_CODEX_CASE selects the behavior: ok | exit | timeout | no_thread |
 wrong_thread | bad_uuid | dup_thread | dup_completed | turn_failed |
-incomplete | nonfatal_error | nonjson | empty | edit_tracked |
+incomplete | nonfatal_error | nonjson | empty | edit_tracked | commit |
 create_untracked | slow (runs one command, then takes a second to finish).
 
 FAKE_CODEX_LOG, if set, gets one JSON line per call with the argv, stdin and
@@ -58,6 +58,9 @@ if case == "timeout":
     time.sleep(60)
 if case == "edit_tracked":
     Path("a.txt").write_text("changed by the reviewer\n")
+if case == "commit":
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m",
+                    "Reviewer commit"], check=True)
 if case == "create_untracked":
     Path("reviewer-scratch.txt").write_text("scratch\n")
 

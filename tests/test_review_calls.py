@@ -140,10 +140,10 @@ def test_moved_head_or_modified_file_refused_before_codex_runs(repo, review):
     for label, run in (("start", review.start),
                        ("continue", lambda: review.continue_(body))):
         (repo.path / "a.txt").write_text("edited\n")
-        refused(run, "commit or stash")
+        refused(run, "stash them to keep this review")
         repo.git("checkout", "--", "a.txt")
         repo.commit("c.txt", "later\n", "Later commit")
-        refused(run, "HEAD has moved")
+        refused(run, f"This review covers {repo.head[:7]} only")
         repo.git("reset", "-q", "--hard", repo.head)
         if label == "start":
             assert review.start().returncode == 0
@@ -158,10 +158,25 @@ def test_tracked_edit_during_the_call_rejects_the_response(review):
     text = review.transcript()
     assert "## Step 2 — Codex review (FAILED)" in text
     assert "the tree changed during the call" in text
-    assert " M a.txt" in text
+    assert "Tracked files changed during the call:\n M a.txt" in text
     assert RESPONSE_MARKER not in text + result.stdout
     response = review.path / "runs/01-step-2-codex-review/response.md"
     assert RESPONSE_MARKER in response.read_text()
+    assert review.session() is None
+    # The edit is the reviewer's, so the remedies for the user's own
+    # changes don't apply.
+    for remedy in ("commit or stash", "stash them", "re-run code-prepare"):
+        assert remedy not in result.stderr + text
+
+
+def test_a_commit_during_the_call_rejects_the_response(repo, review):
+    result = review.start("commit")
+    assert result.returncode == 3
+    now = repo.git("rev-parse", "--short=7", "HEAD").strip()
+    moved = f"HEAD moved during the call (was {repo.head[:7]}, now {now})."
+    assert moved in result.stderr
+    assert moved in review.transcript()
+    assert "re-run code-prepare" not in result.stderr + review.transcript()
     assert review.session() is None
 
 

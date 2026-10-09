@@ -9,7 +9,4 @@ These rules apply to every xreview skill for the rest of this session. `<name>` 
 - Record your own sections with `xreview append`. Only `xreview` writes `state.json` and `transcript.md`. Never edit them yourself.
 - Run `xreview start` and `xreview continue` with the Bash tool's `run_in_background: true` and `timeout: 2700000`. While Codex works they print a progress line every 30 seconds; when it finishes, a status line and the path to Codex's response. You're notified when the call ends.
 - Don't open a call's output (`response.md`, or `events.jsonl` while Codex is running) until the skill's next step says to. Read files with your file-reading tool, not by printing them in Bash.
-- If an `xreview` command exits non-zero, stop and show the user its message. Don't work around a failed check:
-  - uncommitted changes to tracked files: ask the user to commit or stash them;
-  - HEAD has moved since prepare: tell the user to re-run code-prepare;
-  - a failed Codex call (exit 3): offer one retry, which is the same command run again. If the tree changed during the call, the user restores it first.
+- If an `xreview` command exits non-zero, stop and show the user its message, unless the skill's step says how to handle that failure. The message says what to fix. Don't work around a failed check. If it exited 3 (the Codex call failed or its response was rejected), offer one retry: the same command, run again once the user has done what the message says. If the retry fails too, stop.

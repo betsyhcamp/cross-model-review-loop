@@ -86,18 +86,14 @@ def subject(sha: str) -> str:
     return git_out("log", "-1", "--format=%s", sha).strip()
 
 
-def uncommitted() -> str | None:
-    """A failure message if tracked files have uncommitted changes (D7).
+def head() -> str:
+    return git_out("rev-parse", "HEAD").strip()
 
-    Untracked files are ignored.
-    """
-    changes = git_out("status", "--porcelain", "--untracked-files=no")
-    if changes.strip():
-        return (
-            "uncommitted changes to tracked files; commit or stash them "
-            f"first:\n{changes.rstrip()}"
-        )
-    return None
+
+def uncommitted() -> str:
+    """The `git status` lines of tracked files with uncommitted changes (D7),
+    or "" if there are none. Untracked files are ignored."""
+    return git_out("status", "--porcelain", "--untracked-files=no").rstrip()
 
 
 # --- prepare ----------------------------------------------------------------
@@ -120,15 +116,18 @@ def prepare(base: str, name: str | None) -> None:
         raise CheckFailed(f"{base} is not an ancestor of HEAD.")
     if int(git_out("rev-list", "--count", f"{base_sha}..HEAD")) == 0:
         raise CheckFailed(f"there are no commits after {base}.")
-    problem = uncommitted()
-    if problem:
-        raise CheckFailed(problem)
+    changes = uncommitted()
+    if changes:
+        raise CheckFailed(
+            "uncommitted changes to tracked files; commit or stash them "
+            f"first:\n{changes}"
+        )
 
     name = unused_name(name or default_name())
     exclude_reviews()
     review = REVIEWS / name
     review.mkdir(parents=True)
-    head_sha = git_out("rev-parse", "HEAD").strip()
+    head_sha = head()
     base_commit = (base_sha, subject(base_sha))
     head_commit = (head_sha, subject(head_sha))
     transcript.create(review, name, reviewer, base_commit, head_commit)
@@ -203,20 +202,39 @@ def check(name: str) -> None:
 
 
 def tree_problems(state: dict) -> list[str]:
-    """The tree check (§8.4): HEAD is still the reviewed head, and tracked
-    files are clean."""
+    """The tree check (§8.4) on an existing review: HEAD is still the
+    reviewed head, and tracked files are clean. Each problem says what to
+    do about it."""
     problems = []
-    head = git_out("rev-parse", "HEAD").strip()
-    reviewed = state["reviewed_head"]
-    if head != reviewed:
+    reviewed, now = state["reviewed_head"], head()
+    if now != reviewed:
         problems.append(
-            f"HEAD has moved since prepare (reviewed {reviewed[:7]}, "
-            f"now {head[:7]}); re-run code-prepare."
+            f"HEAD has moved since prepare (reviewed {reviewed[:7]}, now "
+            f"{now[:7]}). This review covers {reviewed[:7]} only. To review "
+            "the new commits, re-run code-prepare in the session that wrote "
+            "the code."
         )
-    problem = uncommitted()
-    if problem:
-        problems.append(problem)
+    changes = uncommitted()
+    if changes:
+        problems.append(
+            "uncommitted changes to tracked files; stash them to keep this "
+            f"review (a commit would move HEAD):\n{changes}"
+        )
     return problems
+
+
+def tree_changes(state: dict) -> list[str]:
+    """What changed during a reviewer call (D21), with no remedy: the change
+    may be the reviewer's, so committing it would be wrong."""
+    changes = []
+    reviewed, now = state["reviewed_head"], head()
+    if now != reviewed:
+        changes.append(f"HEAD moved during the call (was {reviewed[:7]}, "
+                       f"now {now[:7]}).")
+    lines = uncommitted()
+    if lines:
+        changes.append(f"Tracked files changed during the call:\n{lines}")
+    return changes
 
 
 def prompt_problems(review: Path, state: dict) -> list[str]:
@@ -310,8 +328,9 @@ def call_reviewer(review: Path, state: dict, message: str,
 
     Starts a session if none is stored, otherwise resumes it. The tree check
     runs again when Codex exits (D21). A failed call or a rejected response
-    gets a (FAILED) section and raises ReviewerError (exit 3). Only a status
-    line and the response path are printed, never the response itself.
+    gets a (FAILED) section, listing anything that changed in the tree, and
+    raises ReviewerError (exit 3). Only a status line and the response path
+    are printed, never the response itself.
     """
     number = transcript.attempt(review, sent)
     if number > 1:
@@ -332,7 +351,7 @@ def call_reviewer(review: Path, state: dict, message: str,
             response = codex.resume(session, message, Path.cwd(), run_dir)
     except codex.ReviewerError as exc:
         error = str(exc)
-    changed = tree_problems(state)
+    changed = tree_changes(state)
     if error or changed:
         if error:
             summary = f"{codex.DISPLAY_NAME} call failed: {error}"

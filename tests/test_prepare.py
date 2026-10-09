@@ -180,11 +180,15 @@ def test_tree_check(repo, review):
     result = check(repo, review)
     assert result.returncode == 1
     assert "a.txt" in result.stderr
+    assert "stash them to keep this review" in result.stderr
     repo.git("checkout", "--", "a.txt")
-    repo.commit("c.txt", "new\n", "Later commit")
+    later = repo.commit("c.txt", "new\n", "Later commit")
     result = check(repo, review)
     assert result.returncode == 1
-    assert "HEAD has moved" in result.stderr
+    assert (f"HEAD has moved since prepare (reviewed {repo.head[:7]}, now "
+            f"{later[:7]}). This review covers {repo.head[:7]} only. To "
+            "review the new commits, re-run code-prepare in the session "
+            "that wrote the code.") in result.stderr
 
 
 @pytest.mark.parametrize("quoted", [False, True], ids=["reflowed", "quoted"])

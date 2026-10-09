@@ -13,7 +13,7 @@ This is Session B, a fresh session that runs the review debate with Codex. If no
 
 First run `xreview prompt --template shared/protocol` and follow it.
 
-1. Start Codex's review (Step 2): run `xreview start $0` in the background. If it refuses or fails, show the message and stop. If HEAD has moved since prepare, tell the user to re-run code-prepare.
+1. Start Codex's review (Step 2): run `xreview start $0` in the background.
 2. While Codex works, read `.reviews/$0/claude-handoff.md` and everything it lists. Don't change anything.
 3. When the call finishes, run `xreview prompt $0 --template code/step3-claude-rebuttal` and follow it. The feedback it refers to is Codex's review, in the `response.md` file whose path the runner printed. Write your rebuttal to `.reviews/$0/messages/03-rebuttal.md`.
 4. Send the rebuttal (Step 4): run `xreview continue $0 --template code/step4-reviewer-response --body messages/03-rebuttal.md --sent-heading "Step 3 — Claude rebuttal — sent to Codex" --response-heading "Step 4 — Codex response"` in the background, and wait for it to finish.
