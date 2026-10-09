@@ -32,6 +32,7 @@ def test_creates_state_header_and_summary(repo):
     state = json.loads((review / "state.json").read_text())
     assert state == {"base": repo.base, "reviewed_head": repo.head,
                      "reviewer_session_id": None}
+    assert (review / "messages").is_dir()
     header = (review / "transcript.md").read_text()
     assert header.startswith(
         "# Review transcript — main\n\n"

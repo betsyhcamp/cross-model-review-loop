@@ -127,6 +127,7 @@ def prepare(base: str, name: str | None) -> None:
     exclude_reviews()
     review = REVIEWS / name
     review.mkdir(parents=True)
+    (review / "messages").mkdir()
     head_sha = head()
     base_commit = (base_sha, subject(base_sha))
     head_commit = (head_sha, subject(head_sha))

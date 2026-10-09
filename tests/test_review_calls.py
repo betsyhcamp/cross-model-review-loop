@@ -64,7 +64,6 @@ class Review:
         return runner
 
     def message(self, name: str, text: str) -> str:
-        (self.path / "messages").mkdir(exist_ok=True)
         (self.path / "messages" / name).write_text(text)
         return f"messages/{name}"
 
@@ -218,7 +217,6 @@ def test_paths_outside_the_review_folder_are_refused(repo, review, path):
     before = (len(review.calls()), review.transcript())
     (repo.tmp / "secret.md").write_text("SECRET\n")
     (repo.path / ".reviews" / "elsewhere.md").write_text("SECRET\n")
-    (review.path / "messages").mkdir()
     (review.path / "messages" / "link.md").symlink_to(repo.tmp / "secret.md")
     if path == "absolute":
         path = str(repo.tmp / "secret.md")
