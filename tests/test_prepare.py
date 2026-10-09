@@ -270,7 +270,12 @@ def test_name_needed_only_for_placeholders(repo):
 def test_every_template_a_skill_names_exists():
     names = set()
     for skill in (ROOT / "skills").glob("*/SKILL.md"):
-        names.update(re.findall(r"--template ([\w/-]+)", skill.read_text()))
+        text = skill.read_text()
+        found = re.findall(r"--template(?:=|\s+)([^\s`]+)", text)
+        # Every --template must match, so a form the pattern doesn't know
+        # fails here instead of being skipped.
+        assert text.count("--template") == len(found), skill
+        names.update(found)
     assert len(names) >= 5, names
     for name in sorted(names):
         assert (ROOT / "templates" / f"{name}.md").is_file(), name
