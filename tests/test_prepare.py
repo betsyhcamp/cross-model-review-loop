@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -333,6 +334,16 @@ class PromptTests(RepoCase):
                               "code/reviewer-prompt-guide")
         self.assertEqual(result.returncode, 1)
         self.assertIn("needs a review name", result.stderr)
+
+    def test_every_template_a_skill_names_exists(self):
+        names = set()
+        for skill in (ROOT / "skills").glob("*/SKILL.md"):
+            text = skill.read_text()
+            names.update(re.findall(r"--template ([\w/-]+)", text))
+        self.assertGreaterEqual(len(names), 5, names)
+        for name in sorted(names):
+            with self.subTest(name):
+                self.assertTrue((ROOT / "templates" / f"{name}.md").is_file())
 
     def test_templates_outside_templates_folder_are_refused(self):
         (self.tmp / "secret.md").write_text("SECRET\n")

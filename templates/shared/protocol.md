@@ -4,7 +4,12 @@ These rules apply to every xreview skill for the rest of this session. `<name>` 
 
 - `xreview` is a command on your PATH. Run it as a bare command. Don't look for its source, templates or install folder.
 - When a step says to follow `xreview prompt ...`, run that command and treat the text it prints as the instructions for that step.
-- Only `xreview` writes `state.json` and `transcript.md`. Never edit them yourself.
+- During the debate and decision rounds, change no file outside `.reviews/<name>/`.
+- Write everything you send to Codex, and every section you record, to a file in `.reviews/<name>/messages/` first. Paths you give `xreview` with `--body` or `--file` are relative to `.reviews/<name>/`.
+- Record your own sections with `xreview append`. Only `xreview` writes `state.json` and `transcript.md`. Never edit them yourself.
+- Run `xreview start` and `xreview continue` with the Bash tool's `run_in_background: true` and `timeout: 2700000`. While Codex works they print a progress line every 30 seconds; when it finishes, a status line and the path to Codex's response. You're notified when the call ends.
+- Don't open a call's output (`response.md`, or `events.jsonl` while Codex is running) until the skill's next step says to. Read files with your file-reading tool, not by printing them in Bash.
 - If an `xreview` command exits non-zero, stop and show the user its message. Don't work around a failed check:
   - uncommitted changes to tracked files: ask the user to commit or stash them;
-  - HEAD has moved since prepare: tell the user to re-run code-prepare.
+  - HEAD has moved since prepare: tell the user to re-run code-prepare;
+  - a failed Codex call (exit 3): offer one retry, which is the same command run again. If the tree changed during the call, the user restores it first.
