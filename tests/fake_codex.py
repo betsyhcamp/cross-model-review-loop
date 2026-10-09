@@ -5,8 +5,9 @@
 
 FAKE_CODEX_CASE selects the behavior: ok | exit | timeout | no_thread |
 wrong_thread | bad_uuid | dup_thread | dup_completed | turn_failed |
-incomplete | nonfatal_error | nonjson | empty | edit_tracked | commit |
-create_untracked | slow (runs one command, then takes a second to finish).
+incomplete | nonfatal_error | nonjson | empty | edit_tracked |
+edit_then_exit (edits a tracked file, then fails) | commit | create_untracked
+| slow (runs one command, then takes a second to finish).
 
 FAKE_CODEX_LOG, if set, gets one JSON line per call with the argv, stdin and
 working folder. FAKE_CODEX_PIDS, if set, gets the pids of this process and
@@ -56,8 +57,11 @@ if case == "timeout":
         Path(os.environ["FAKE_CODEX_PIDS"]).write_text(
             f"{os.getpid()} {child.pid}\n")
     time.sleep(60)
-if case == "edit_tracked":
+if case in ("edit_tracked", "edit_then_exit"):
     Path("a.txt").write_text("changed by the reviewer\n")
+if case == "edit_then_exit":
+    print("Codex crashed after editing", file=sys.stderr)
+    sys.exit(7)
 if case == "commit":
     subprocess.run(["git", "commit", "-q", "--allow-empty", "-m",
                     "Reviewer commit"], check=True)

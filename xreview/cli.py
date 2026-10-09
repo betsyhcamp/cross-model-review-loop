@@ -329,9 +329,10 @@ def call_reviewer(review: Path, state: dict, message: str,
 
     Starts a session if none is stored, otherwise resumes it. The tree check
     runs again when Codex exits (D21). A failed call or a rejected response
-    gets a (FAILED) section, listing anything that changed in the tree, and
-    raises ReviewerError (exit 3). Only a status line and the response path
-    are printed, never the response itself.
+    gets a (FAILED) section and raises ReviewerError (exit 3). If the tree
+    changed, the section lists the changes and says to restore the tree.
+    Only a status line and the response path are printed, never the
+    response itself.
     """
     number = transcript.attempt(review, sent)
     if number > 1:
@@ -358,8 +359,9 @@ def call_reviewer(review: Path, state: dict, message: str,
             summary = f"{codex.DISPLAY_NAME} call failed: {error}"
         else:
             summary = ("The response was rejected: the tree changed during "
-                       "the call. Restore it before any retry.")
-        details = "\n\n".join([summary, *changed,
+                       "the call.")
+        restore = ["Restore the tree before any retry."] if changed else []
+        details = "\n\n".join([summary, *changed, *restore,
                                f"Diagnostics: `{run_dir}/`"])
         transcript.append(review, f"{received} (FAILED)", details,
                           f"{transcript.now()} · run {run}")

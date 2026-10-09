@@ -157,7 +157,8 @@ def test_tracked_edit_during_the_call_rejects_the_response(review):
     text = review.transcript()
     assert "## Step 2 — Codex review (FAILED)" in text
     assert "the tree changed during the call" in text
-    assert "Tracked files changed during the call:\n M a.txt" in text
+    assert ("Tracked files changed during the call:\n M a.txt\n\n"
+            "Restore the tree before any retry.") in text
     assert RESPONSE_MARKER not in text + result.stdout
     response = review.path / "runs/01-step-2-codex-review/response.md"
     assert RESPONSE_MARKER in response.read_text()
@@ -172,10 +173,26 @@ def test_a_commit_during_the_call_rejects_the_response(repo, review):
     result = review.start("commit")
     assert result.returncode == 3
     now = repo.git("rev-parse", "--short=7", "HEAD").strip()
-    moved = f"HEAD moved during the call (was {repo.head[:7]}, now {now})."
+    moved = (f"HEAD moved during the call (was {repo.head[:7]}, now {now})."
+             "\n\nRestore the tree before any retry.")
     assert moved in result.stderr
     assert moved in review.transcript()
     assert "re-run code-prepare" not in result.stderr + review.transcript()
+    assert review.session() is None
+
+
+def test_a_failed_call_that_changed_the_tree_says_to_restore_it(review):
+    # Without the restore line, a retry would reach the pre-call check,
+    # which says to stash: that keeps the reviewer's edit.
+    result = review.start("edit_then_exit")
+    assert result.returncode == 3
+    for output in (result.stderr, review.transcript()):
+        assert "Codex exited with code 7" in output
+        assert ("Tracked files changed during the call:\n M a.txt\n\n"
+                "Restore the tree before any retry.") in output
+        for remedy in ("commit or stash", "stash them",
+                       "re-run code-prepare"):
+            assert remedy not in output
     assert review.session() is None
 
 
@@ -235,6 +252,8 @@ def test_codex_failure_is_recorded_and_a_retry_is_marked(review):
     assert "Authentication failed" in result.stderr
     assert "## Step 2 — Codex review (FAILED)" in review.transcript()
     assert review.session() is None
+    # Nothing changed in the tree, so there's nothing to restore.
+    assert "Restore the tree" not in result.stderr + review.transcript()
     result = review.start()
     assert result.returncode == 0, result.stderr
     text = review.transcript()
