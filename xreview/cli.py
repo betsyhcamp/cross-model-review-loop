@@ -1,7 +1,8 @@
-"""xreview command line: prepare, check and prompt.
+"""xreview command line: prepare, check, start, continue, prompt, append.
 
 Exit codes: 0 success, 1 failed precondition or check, 2 usage error
-(argparse's own code). Error messages go to stderr, prefixed "xreview:".
+(argparse's own code), 3 the reviewer call failed or its response was
+rejected. Error messages go to stderr, prefixed "xreview:".
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 from . import transcript
 from .providers import codex
@@ -61,6 +63,23 @@ def read_template(name: str) -> str:
     if not path.is_relative_to(TEMPLATES) or not path.is_file():
         raise CheckFailed(f"no template {name!r} in templates/.")
     return path.read_text(encoding="utf-8")
+
+
+def fill(text: str, state: dict) -> str:
+    text = text.replace("{base}", state["base"])
+    return text.replace("{head}", state["reviewed_head"])
+
+
+def review_file(review: Path, given: str) -> Path:
+    """Resolve a --body or --file path against the review folder.
+
+    A path outside the folder is refused, so the recommended allow rule
+    can't be used to send any local file to Codex without a prompt.
+    """
+    path = (review / given).resolve()
+    if not path.is_relative_to(review.resolve()) or not path.is_file():
+        raise CheckFailed(f"{given!r} isn't a file inside {review}/.")
+    return path
 
 
 def subject(sha: str) -> str:
@@ -237,7 +256,113 @@ def normalize(text: str) -> str:
     return " ".join(unquoted.split())
 
 
-# --- prompt -----------------------------------------------------------------
+# --- start and continue ----------------------------------------------------
+
+
+def start(name: str) -> None:
+    """Send reviewer-prompt.md, unchanged, to a new Codex session (Step 2)."""
+    enter_repo()
+    review = review_dir(name)
+    state = transcript.read_state(review)
+    if state["reviewer_session_id"]:
+        raise CheckFailed(
+            f"review {name!r} has already started (Codex session "
+            f"{state['reviewer_session_id']}); start runs once per review."
+        )
+    problems = tree_problems(state) + prompt_problems(review, state)
+    if problems:
+        raise CheckFailed("\n".join(problems))
+    message = (review / "reviewer-prompt.md").read_text(encoding="utf-8")
+    call_reviewer(review, state, message,
+                  "Reviewer prompt — sent to Codex", "Step 2 — Codex review")
+
+
+def continue_review(name: str, templates: list[str], body: str,
+                    sent: str, received: str) -> None:
+    """Send templates plus Claude's body to the stored Codex session."""
+    enter_repo()
+    review = review_dir(name)
+    state = transcript.read_state(review)
+    if not state["reviewer_session_id"]:
+        raise CheckFailed(
+            f"review {name!r} has no Codex session yet; run start first."
+        )
+    text = review_file(review, body).read_text(encoding="utf-8")
+    message = compose(templates, state, text)
+    problems = tree_problems(state)
+    if problems:
+        raise CheckFailed("\n".join(problems))
+    call_reviewer(review, state, message, sent, received)
+
+
+def compose(templates: list[str], state: dict, body: str) -> str:
+    """The templates in order, then the body, one blank line apart (§8.2).
+
+    Placeholders are filled in the templates only; the body is never changed.
+    """
+    parts = [fill(read_template(name), state) for name in templates]
+    return "\n\n".join(part.rstrip("\n") for part in [*parts, body]) + "\n"
+
+
+def call_reviewer(review: Path, state: dict, message: str,
+                  sent: str, received: str) -> None:
+    """Send message to Codex and record both sides in the transcript.
+
+    Starts a session if none is stored, otherwise resumes it. The tree check
+    runs again when Codex exits (D21). A failed call or a rejected response
+    gets a (FAILED) section and raises ReviewerError (exit 3). Only a status
+    line and the response path are printed, never the response itself.
+    """
+    number = transcript.attempt(review, sent)
+    if number > 1:
+        sent += f" (attempt {number})"
+        received += f" (attempt {number})"
+    run_dir = transcript.new_run(review, received)
+    run = run_dir.name[:2]
+    (run_dir / "prompt.md").write_text(message, encoding="utf-8")
+    transcript.append(review, sent, message, f"{transcript.now()} · run {run}")
+
+    began = time.monotonic()
+    session = state["reviewer_session_id"]
+    error = None
+    try:
+        if session is None:
+            session, response = codex.start(message, Path.cwd(), run_dir)
+        else:
+            response = codex.resume(session, message, Path.cwd(), run_dir)
+    except codex.ReviewerError as exc:
+        error = str(exc)
+    changed = tree_problems(state)
+    if error or changed:
+        if error:
+            summary = f"{codex.DISPLAY_NAME} call failed: {error}"
+        else:
+            summary = ("The response was rejected: the tree changed during "
+                       "the call. Restore it before any retry.")
+        details = "\n\n".join([summary, *changed,
+                               f"Diagnostics: `{run_dir}/`"])
+        transcript.append(review, f"{received} (FAILED)", details,
+                          f"{transcript.now()} · run {run}")
+        raise codex.ReviewerError(
+            f"{details}\nThe transcript has a (FAILED) section for run {run}."
+        )
+
+    if state["reviewer_session_id"] is None:
+        state["reviewer_session_id"] = session
+        transcript.write_state(review, state)
+    took = duration(time.monotonic() - began)
+    transcript.append(review, received, response,
+                      f"{transcript.now()} · run {run} · {took}")
+    print(f"{received}: done in {took} (run {run}).")
+    print(f"Response: {Path.cwd() / run_dir / 'response.md'}")
+
+
+def duration(seconds: float) -> str:
+    minutes, secs = divmod(round(seconds), 60)
+    return f"{minutes}m {secs}s" if minutes else f"{secs}s"
+
+
+# --- prompt and append ------------------------------------------------------
 
 
 def prompt(name: str | None, template: str) -> None:
@@ -247,10 +372,17 @@ def prompt(name: str | None, template: str) -> None:
     if "{base}" in text or "{head}" in text:
         if name is None:
             raise CheckFailed(f"template {template!r} needs a review name.")
-        state = transcript.read_state(review_dir(name))
-        text = text.replace("{base}", state["base"])
-        text = text.replace("{head}", state["reviewed_head"])
+        text = fill(text, transcript.read_state(review_dir(name)))
     print(text.rstrip("\n"))
+
+
+def append(name: str, heading: str, file: str) -> None:
+    """Append one of Claude's sections to the transcript, word for word."""
+    enter_repo()
+    review = review_dir(name)
+    text = review_file(review, file).read_text(encoding="utf-8")
+    transcript.append(review, heading, text, transcript.now())
+    print(f"Appended \"{heading}\" to {review / transcript.TRANSCRIPT}.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -258,25 +390,51 @@ def main(argv: list[str] | None = None) -> int:
         prog="xreview", description="Cross-model review runner."
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
     p = sub.add_parser("prepare", help="check git, create the review folder")
     p.add_argument("base", help="base commit; the review covers <base>..HEAD")
     p.add_argument("--name", help="review name (default: the branch name)")
+    p.set_defaults(run=lambda a: prepare(a.base, a.name))
+
     p = sub.add_parser("check", help="run the tree check and the prompt check")
     p.add_argument("name")
+    p.set_defaults(run=lambda a: check(a.name))
+
+    p = sub.add_parser("start", help="send the reviewer prompt to Codex")
+    p.add_argument("name")
+    p.set_defaults(run=lambda a: start(a.name))
+
+    p = sub.add_parser("continue", help="send a message to the same session")
+    p.add_argument("name")
+    p.add_argument("--template", action="append", required=True,
+                   help="name under templates/, without .md; repeatable")
+    p.add_argument("--body", required=True,
+                   help="Claude's file, relative to .reviews/<name>/")
+    p.add_argument("--sent-heading", required=True)
+    p.add_argument("--response-heading", required=True)
+    p.set_defaults(run=lambda a: continue_review(
+        a.name, a.template, a.body, a.sent_heading, a.response_heading))
+
     p = sub.add_parser("prompt", help="print a template for Claude to follow")
     p.add_argument("name", nargs="?")
-    p.add_argument(
-        "--template", required=True, help="name under templates/, without .md"
-    )
+    p.add_argument("--template", required=True,
+                   help="name under templates/, without .md")
+    p.set_defaults(run=lambda a: prompt(a.name, a.template))
+
+    p = sub.add_parser("append", help="append Claude's section to transcript")
+    p.add_argument("name")
+    p.add_argument("--heading", required=True)
+    p.add_argument("--file", required=True,
+                   help="Claude's file, relative to .reviews/<name>/")
+    p.set_defaults(run=lambda a: append(a.name, a.heading, a.file))
+
     args = parser.parse_args(argv)
     try:
-        if args.command == "prepare":
-            prepare(args.base, args.name)
-        elif args.command == "check":
-            check(args.name)
-        else:
-            prompt(args.name, args.template)
+        args.run(args)
     except CheckFailed as exc:
         print(f"xreview: {exc}", file=sys.stderr)
         return 1
+    except codex.ReviewerError as exc:
+        print(f"xreview: {exc}", file=sys.stderr)
+        return 3
     return 0
