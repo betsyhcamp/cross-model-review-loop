@@ -51,11 +51,13 @@ if case == "exit":
     print("Authentication failed", file=sys.stderr)
     sys.exit(7)
 if case == "timeout":
-    child = subprocess.Popen([sys.executable, "-c",
-                              "import time; time.sleep(60)"])
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"]
+    )
     if os.environ.get("FAKE_CODEX_PIDS"):
         Path(os.environ["FAKE_CODEX_PIDS"]).write_text(
-            f"{os.getpid()} {child.pid}\n")
+            f"{os.getpid()} {child.pid}\n"
+        )
     time.sleep(60)
 if case in ("edit_tracked", "edit_then_exit"):
     Path("a.txt").write_text("changed by the reviewer\n")
@@ -63,8 +65,10 @@ if case == "edit_then_exit":
     print("Codex crashed after editing", file=sys.stderr)
     sys.exit(7)
 if case == "commit":
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m",
-                    "Reviewer commit"], check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "Reviewer commit"],
+        check=True,
+    )
 if case == "create_untracked":
     Path("reviewer-scratch.txt").write_text("scratch\n")
 
@@ -85,17 +89,34 @@ for _ in range(threads):
     emit({"type": "thread.started", "thread_id": session})
 emit({"type": "turn.started"})
 if case == "slow":
-    emit({"type": "item.completed",
-          "item": {"id": "item_1", "type": "command_execution",
-                   "command": "ls", "exit_code": 0, "status": "completed"}})
+    emit(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item_1",
+                "type": "command_execution",
+                "command": "ls",
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }
+    )
     time.sleep(1)
 if case == "nonfatal_error":
     emit({"type": "error", "message": "Reconnecting... 1/5"})
-emit({"type": "item.completed",
-      "item": {"id": "item_0", "type": "agent_message", "text": RESPONSE}})
+emit(
+    {
+        "type": "item.completed",
+        "item": {"id": "item_0", "type": "agent_message", "text": RESPONSE},
+    }
+)
 if case == "turn_failed":
     emit({"type": "turn.failed", "error": {"message": "quota exceeded"}})
 completions = {"turn_failed": 0, "incomplete": 0, "dup_completed": 2}
 for _ in range(completions.get(case, 1)):
-    emit({"type": "turn.completed",
-          "usage": {"input_tokens": 10, "output_tokens": 5}})
+    emit(
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    )

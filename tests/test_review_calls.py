@@ -35,29 +35,48 @@ class Review:
         self.log = repo.tmp / "codex-calls.jsonl"
 
     def xreview(self, *args: str, case: str = "ok"):
-        return self.repo.xreview(*args, FAKE_CODEX_CASE=case,
-                                 FAKE_CODEX_LOG=str(self.log))
+        return self.repo.xreview(
+            *args, FAKE_CODEX_CASE=case, FAKE_CODEX_LOG=str(self.log)
+        )
 
     def start(self, case: str = "ok") -> subprocess.CompletedProcess:
         return self.xreview("start", self.name, case=case)
 
-    def continue_(self, body: str, templates=("code/claude-handoff-guide",),
-                  case: str = "ok") -> subprocess.CompletedProcess:
+    def continue_(
+        self,
+        body: str,
+        templates=("code/claude-handoff-guide",),
+        case: str = "ok",
+    ) -> subprocess.CompletedProcess:
         args = ["continue", self.name]
         for template in templates:
             args += ["--template", template]
-        args += ["--body", body, "--sent-heading", STEP3,
-                 "--response-heading", STEP4]
+        args += [
+            "--body",
+            body,
+            "--sent-heading",
+            STEP3,
+            "--response-heading",
+            STEP4,
+        ]
         return self.xreview(*args, case=case)
 
     def start_in_background(self, pids: Path) -> subprocess.Popen:
         """Start the runner with a codex that hangs; return once codex has
         written its pids."""
-        env = {**self.repo.env, "FAKE_CODEX_CASE": "timeout",
-               "FAKE_CODEX_PIDS": str(pids)}
+        env = {
+            **self.repo.env,
+            "FAKE_CODEX_CASE": "timeout",
+            "FAKE_CODEX_PIDS": str(pids),
+        }
         runner = subprocess.Popen(
-            [str(XREVIEW), "start", self.name], cwd=self.repo.path, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            [str(XREVIEW), "start", self.name],
+            cwd=self.repo.path,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         deadline = time.monotonic() + 10
         while not pids.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -96,15 +115,21 @@ def test_start_sends_the_prompt_unchanged_and_records_both_sides(review):
         assert (run / name).is_file(), name
     assert (run / "prompt.md").read_text() == prompt
     text = review.transcript()
-    assert re.search(r"## Reviewer prompt — sent to Codex\n"
-                     r"_[^\n]+ · run 01_\n\n" + re.escape(prompt), text)
-    assert re.search(r"## Step 2 — Codex review\n"
-                     r"_[^\n]+ · run 01 · \d+s_\n\n"
-                     r"Finding 1: nothing real\.\n\n"
-                     + RESPONSE_MARKER + "\n\n---\n\n$", text)
+    assert re.search(
+        r"## Reviewer prompt — sent to Codex\n"
+        r"_[^\n]+ · run 01_\n\n" + re.escape(prompt),
+        text,
+    )
+    assert re.search(
+        r"## Step 2 — Codex review\n"
+        r"_[^\n]+ · run 01 · \d+s_\n\n"
+        r"Finding 1: nothing real\.\n\n" + RESPONSE_MARKER + "\n\n---\n\n$",
+        text,
+    )
     status, path = result.stdout.splitlines()
-    assert re.search(r"^Step 2 — Codex review: done in \d+s \(run 01\)\.$",
-                     status)
+    assert re.search(
+        r"^Step 2 — Codex review: done in \d+s \(run 01\)\.$", status
+    )
     assert path == f"Response: {run / 'response.md'}"
     assert RESPONSE_MARKER not in result.stdout + result.stderr
 
@@ -136,8 +161,10 @@ def test_moved_head_or_modified_file_refused_before_codex_runs(repo, review):
         assert message in result.stderr
         assert (len(review.calls()), review.transcript()) == before
 
-    for label, run in (("start", review.start),
-                       ("continue", lambda: review.continue_(body))):
+    for label, run in (
+        ("start", review.start),
+        ("continue", lambda: review.continue_(body)),
+    ):
         (repo.path / "a.txt").write_text("edited\n")
         refused(run, "stash them to keep this review")
         repo.git("checkout", "--", "a.txt")
@@ -157,8 +184,10 @@ def test_tracked_edit_during_the_call_rejects_the_response(review):
     text = review.transcript()
     assert "## Step 2 — Codex review (FAILED)" in text
     assert "the tree changed during the call" in text
-    assert ("Tracked files changed during the call:\n M a.txt\n\n"
-            "Restore the tree before any retry.") in text
+    assert (
+        "Tracked files changed during the call:\n M a.txt\n\n"
+        "Restore the tree before any retry."
+    ) in text
     assert RESPONSE_MARKER not in text + result.stdout
     response = review.path / "runs/01-step-2-codex-review/response.md"
     assert RESPONSE_MARKER in response.read_text()
@@ -173,8 +202,10 @@ def test_a_commit_during_the_call_rejects_the_response(repo, review):
     result = review.start("commit")
     assert result.returncode == 3
     now = repo.git("rev-parse", "--short=7", "HEAD").strip()
-    moved = (f"HEAD moved during the call (was {repo.head[:7]}, now {now})."
-             "\n\nRestore the tree before any retry.")
+    moved = (
+        f"HEAD moved during the call (was {repo.head[:7]}, now {now})."
+        "\n\nRestore the tree before any retry."
+    )
     assert moved in result.stderr
     assert moved in review.transcript()
     assert "re-run code-prepare" not in result.stderr + review.transcript()
@@ -188,10 +219,11 @@ def test_a_failed_call_that_changed_the_tree_says_to_restore_it(review):
     assert result.returncode == 3
     for output in (result.stderr, review.transcript()):
         assert "Codex exited with code 7" in output
-        assert ("Tracked files changed during the call:\n M a.txt\n\n"
-                "Restore the tree before any retry.") in output
-        for remedy in ("commit or stash", "stash them",
-                       "re-run code-prepare"):
+        assert (
+            "Tracked files changed during the call:\n M a.txt\n\n"
+            "Restore the tree before any retry."
+        ) in output
+        for remedy in ("commit or stash", "stash them", "re-run code-prepare"):
             assert remedy not in output
     assert review.session() is None
 
@@ -213,22 +245,29 @@ def test_continue_composes_byte_exact_and_resumes_the_session(repo, review):
     handoff = (ROOT / "templates/code/claude-handoff-guide.md").read_text()
     handoff = handoff.replace("{base}", repo.base)
     handoff = handoff.replace("{head}", repo.head)
-    expected = (protocol.rstrip("\n") + "\n\n" + handoff.rstrip("\n")
-                + "\n\n  Body keeps {base} and {head} as written.\n")
+    expected = (
+        protocol.rstrip("\n")
+        + "\n\n"
+        + handoff.rstrip("\n")
+        + "\n\n  Body keeps {base} and {head} as written.\n"
+    )
     call = review.calls()[1]
     assert call["stdin"] == expected
     assert call["argv"][:3] == ["exec", "resume", SESSION]
     run = review.path / "runs" / "02-step-4-codex-response"
     assert (run / "prompt.md").read_text() == expected
     text = review.transcript()
-    assert re.search(f"## {STEP3}\n_[^\n]+ · run 02_\n\n"
-                     + re.escape(expected), text)
+    assert re.search(
+        f"## {STEP3}\n_[^\n]+ · run 02_\n\n" + re.escape(expected), text
+    )
     assert f"## {STEP4}\n_" in text
     assert RESPONSE_MARKER not in result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("path", ["absolute", "../elsewhere.md",
-                                  "messages/link.md", "messages/missing.md"])
+@pytest.mark.parametrize(
+    "path",
+    ["absolute", "../elsewhere.md", "messages/link.md", "messages/missing.md"],
+)
 def test_paths_outside_the_review_folder_are_refused(repo, review, path):
     review.start()
     before = (len(review.calls()), review.transcript())
@@ -240,8 +279,9 @@ def test_paths_outside_the_review_folder_are_refused(repo, review, path):
     result = review.continue_(path)
     assert result.returncode == 1
     assert "isn't a file inside" in result.stderr
-    result = review.xreview("append", review.name, "--heading", "Plan",
-                            "--file", path)
+    result = review.xreview(
+        "append", review.name, "--heading", "Plan", "--file", path
+    )
     assert result.returncode == 1
     assert (len(review.calls()), review.transcript()) == before
 
@@ -262,10 +302,14 @@ def test_codex_failure_is_recorded_and_a_retry_is_marked(review):
     assert (review.path / "runs/02-step-2-codex-review-attempt-2").is_dir()
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP,
-                                 signal.SIGINT], ids=lambda sig: sig.name)
-def test_a_stop_signal_kills_codex_and_is_recorded(repo, review,
-                                                   process_gone, sig):
+@pytest.mark.parametrize(
+    "sig",
+    [signal.SIGTERM, signal.SIGHUP, signal.SIGINT],
+    ids=lambda sig: sig.name,
+)
+def test_a_stop_signal_kills_codex_and_is_recorded(
+    repo, review, process_gone, sig
+):
     pids = repo.tmp / "pids"
     runner = review.start_in_background(pids)
     runner.send_signal(sig)
@@ -274,9 +318,12 @@ def test_a_stop_signal_kills_codex_and_is_recorded(repo, review,
     assert f"stopped ({sig.name})" in stderr
     for pid in map(int, pids.read_text().split()):
         assert process_gone(pid), f"{pid} survived"
-    assert re.search(r"Step 2 — Codex review \(FAILED\)\n_[^\n]+_\n\n"
-                     rf"Codex call failed: The runner was stopped "
-                     rf"\({sig.name}\)", review.transcript())
+    assert re.search(
+        r"Step 2 — Codex review \(FAILED\)\n_[^\n]+_\n\n"
+        rf"Codex call failed: The runner was stopped "
+        rf"\({sig.name}\)",
+        review.transcript(),
+    )
     assert review.session() is None
 
 
@@ -297,12 +344,21 @@ def test_a_stop_that_also_kills_codex_is_recorded(repo, review):
 
 def test_append_records_claudes_section_word_for_word(review):
     plan = "## Part 1\n\n- keep this line exactly\n"
-    result = review.xreview("append", review.name, "--heading",
-                            "Step 5 — Claude final plan", "--file",
-                            review.message("plan.md", plan))
+    result = review.xreview(
+        "append",
+        review.name,
+        "--heading",
+        "Step 5 — Claude final plan",
+        "--file",
+        review.message("plan.md", plan),
+    )
     assert result.returncode == 0, result.stderr
-    assert re.search(r"## Step 5 — Claude final plan\n_[^\n]+_\n\n"
-                     + re.escape(plan) + "\n---\n\n$", review.transcript())
+    assert re.search(
+        r"## Step 5 — Claude final plan\n_[^\n]+_\n\n"
+        + re.escape(plan)
+        + "\n---\n\n$",
+        review.transcript(),
+    )
 
 
 def test_concurrent_appends_stay_intact(repo, review):
@@ -310,34 +366,52 @@ def test_concurrent_appends_stay_intact(repo, review):
     for i, body in bodies.items():
         review.message(f"{i}.md", body)
     processes = [
-        subprocess.Popen([str(XREVIEW), "append", review.name, "--heading",
-                          f"Section {i}", "--file", f"messages/{i}.md"],
-                         cwd=repo.path, env=repo.env,
-                         stdout=subprocess.DEVNULL)
-        for i in bodies]
+        subprocess.Popen(
+            [
+                str(XREVIEW),
+                "append",
+                review.name,
+                "--heading",
+                f"Section {i}",
+                "--file",
+                f"messages/{i}.md",
+            ],
+            cwd=repo.path,
+            env=repo.env,
+            stdout=subprocess.DEVNULL,
+        )
+        for i in bodies
+    ]
     assert [p.wait(timeout=30) for p in processes] == [0] * 6
     text = review.transcript()
     for i, body in bodies.items():
-        assert re.search(f"## Section {i}\n_[^\n]+_\n\n"
-                         + re.escape(body) + "\n---\n\n", text)
+        assert re.search(
+            f"## Section {i}\n_[^\n]+_\n\n" + re.escape(body) + "\n---\n\n",
+            text,
+        )
 
 
-@pytest.mark.parametrize("args", [
-    ("continue", "{name}", "--template", "shared/protocol"),
-    ("append", "{name}", "--file", "x.md"),
-    ("start",),
-])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("continue", "{name}", "--template", "shared/protocol"),
+        ("append", "{name}", "--file", "x.md"),
+        ("start",),
+    ],
+)
 def test_usage_errors_exit_2(review, args):
     args = [arg.format(name=review.name) for arg in args]
     assert review.xreview(*args).returncode == 2
 
 
-def test_only_trailing_newlines_change_at_part_boundaries(tmp_path,
-                                                          monkeypatch):
+def test_only_trailing_newlines_change_at_part_boundaries(
+    tmp_path, monkeypatch
+):
     (tmp_path / "a.md").write_text("A {base}\n\n\n")
     (tmp_path / "b.md").write_text("  B {head}")
     state = {"base": "1" * 40, "reviewed_head": "2" * 40}
     monkeypatch.setattr(cli, "TEMPLATES", tmp_path)
     message = cli.compose(["a", "b", "a"], state, "C {base}\n  \n\n")
-    assert message == (f"A {'1' * 40}\n\n  B {'2' * 40}\n\n"
-                       f"A {'1' * 40}\n\nC {{base}}\n  \n")
+    assert message == (
+        f"A {'1' * 40}\n\n  B {'2' * 40}\n\nA {'1' * 40}\n\nC {{base}}\n  \n"
+    )

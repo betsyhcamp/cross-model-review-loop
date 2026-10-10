@@ -230,8 +230,9 @@ def tree_changes(state: dict) -> list[str]:
     changes = []
     reviewed, now = state["reviewed_head"], head()
     if now != reviewed:
-        changes.append(f"HEAD moved during the call (was {reviewed[:7]}, "
-                       f"now {now[:7]}).")
+        changes.append(
+            f"HEAD moved during the call (was {reviewed[:7]}, now {now[:7]})."
+        )
     lines = uncommitted()
     if lines:
         changes.append(f"Tracked files changed during the call:\n{lines}")
@@ -292,12 +293,18 @@ def start(name: str) -> None:
     if problems:
         raise CheckFailed("\n".join(problems))
     message = (review / "reviewer-prompt.md").read_text(encoding="utf-8")
-    call_reviewer(review, state, message,
-                  "Reviewer prompt — sent to Codex", "Step 2 — Codex review")
+    call_reviewer(
+        review,
+        state,
+        message,
+        "Reviewer prompt — sent to Codex",
+        "Step 2 — Codex review",
+    )
 
 
-def continue_review(name: str, templates: list[str], body: str,
-                    sent: str, received: str) -> None:
+def continue_review(
+    name: str, templates: list[str], body: str, sent: str, received: str
+) -> None:
     """Send templates plus Claude's body to the stored Codex session."""
     enter_repo()
     review = review_dir(name)
@@ -323,8 +330,9 @@ def compose(templates: list[str], state: dict, body: str) -> str:
     return "\n\n".join(part.rstrip("\n") for part in [*parts, body]) + "\n"
 
 
-def call_reviewer(review: Path, state: dict, message: str,
-                  sent: str, received: str) -> None:
+def call_reviewer(
+    review: Path, state: dict, message: str, sent: str, received: str
+) -> None:
     """Send message to Codex and record both sides in the transcript.
 
     Starts a session if none is stored, otherwise resumes it. The tree check
@@ -358,13 +366,19 @@ def call_reviewer(review: Path, state: dict, message: str,
         if error:
             summary = f"{codex.DISPLAY_NAME} call failed: {error}"
         else:
-            summary = ("The response was rejected: the tree changed during "
-                       "the call.")
+            summary = (
+                "The response was rejected: the tree changed during the call."
+            )
         restore = ["Restore the tree before any retry."] if changed else []
-        details = "\n\n".join([summary, *changed, *restore,
-                               f"Diagnostics: `{run_dir}/`"])
-        transcript.append(review, f"{received} (FAILED)", details,
-                          f"{transcript.now()} · run {run}")
+        details = "\n\n".join(
+            [summary, *changed, *restore, f"Diagnostics: `{run_dir}/`"]
+        )
+        transcript.append(
+            review,
+            f"{received} (FAILED)",
+            details,
+            f"{transcript.now()} · run {run}",
+        )
         raise codex.ReviewerError(
             f"{details}\nThe transcript has a (FAILED) section for run {run}."
         )
@@ -373,8 +387,9 @@ def call_reviewer(review: Path, state: dict, message: str,
         state["reviewer_session_id"] = session
         transcript.write_state(review, state)
     took = duration(time.monotonic() - began)
-    transcript.append(review, received, response,
-                      f"{transcript.now()} · run {run} · {took}")
+    transcript.append(
+        review, received, response, f"{transcript.now()} · run {run} · {took}"
+    )
     print(f"{received}: done in {took} (run {run}).")
     print(f"Response: {Path.cwd() / run_dir / 'response.md'}")
 
@@ -404,7 +419,7 @@ def append(name: str, heading: str, file: str) -> None:
     review = review_dir(name)
     text = review_file(review, file).read_text(encoding="utf-8")
     transcript.append(review, heading, text, transcript.now())
-    print(f"Appended \"{heading}\" to {review / transcript.TRANSCRIPT}.")
+    print(f'Appended "{heading}" to {review / transcript.TRANSCRIPT}.')
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -428,26 +443,40 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("continue", help="send a message to the same session")
     p.add_argument("name")
-    p.add_argument("--template", action="append", required=True,
-                   help="name under templates/, without .md; repeatable")
-    p.add_argument("--body", required=True,
-                   help="Claude's file, relative to .reviews/<name>/")
+    p.add_argument(
+        "--template",
+        action="append",
+        required=True,
+        help="name under templates/, without .md; repeatable",
+    )
+    p.add_argument(
+        "--body",
+        required=True,
+        help="Claude's file, relative to .reviews/<name>/",
+    )
     p.add_argument("--sent-heading", required=True)
     p.add_argument("--response-heading", required=True)
-    p.set_defaults(run=lambda a: continue_review(
-        a.name, a.template, a.body, a.sent_heading, a.response_heading))
+    p.set_defaults(
+        run=lambda a: continue_review(
+            a.name, a.template, a.body, a.sent_heading, a.response_heading
+        )
+    )
 
     p = sub.add_parser("prompt", help="print a template for Claude to follow")
     p.add_argument("name", nargs="?")
-    p.add_argument("--template", required=True,
-                   help="name under templates/, without .md")
+    p.add_argument(
+        "--template", required=True, help="name under templates/, without .md"
+    )
     p.set_defaults(run=lambda a: prompt(a.name, a.template))
 
     p = sub.add_parser("append", help="append Claude's section to transcript")
     p.add_argument("name")
     p.add_argument("--heading", required=True)
-    p.add_argument("--file", required=True,
-                   help="Claude's file, relative to .reviews/<name>/")
+    p.add_argument(
+        "--file",
+        required=True,
+        help="Claude's file, relative to .reviews/<name>/",
+    )
     p.set_defaults(run=lambda a: append(a.name, a.heading, a.file))
 
     args = parser.parse_args(argv)

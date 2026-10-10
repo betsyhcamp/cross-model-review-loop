@@ -66,12 +66,17 @@ def resume(session_id: str, prompt: str, repo: Path, run_dir: Path) -> str:
 def command(run_dir: Path, session_id: str | None = None) -> list[str]:
     # exec resume has no --sandbox option, so read-only is set through -c.
     if session_id:
-        args = ["exec", "resume", session_id,
-                "-c", 'sandbox_mode="read-only"']
+        args = ["exec", "resume", session_id, "-c", 'sandbox_mode="read-only"']
     else:
         args = ["exec", "-s", "read-only"]
-    args += ["-c", 'approval_policy="never"', "--json",
-             "-o", str(run_dir / "response.md"), "-"]
+    args += [
+        "-c",
+        'approval_policy="never"',
+        "--json",
+        "-o",
+        str(run_dir / "response.md"),
+        "-",
+    ]
     return ["codex", *args]
 
 
@@ -97,28 +102,38 @@ def execute(argv: list[str], prompt: str, repo: Path, run_dir: Path) -> int:
     for sig in STOP_SIGNALS:
         signal.signal(sig, stop)
     try:
-        with (run_dir / "events.jsonl").open("wb") as out, \
-                (run_dir / "stderr.txt").open("wb") as err:
-            with subprocess.Popen(argv, cwd=repo, stdin=subprocess.PIPE,
-                                  stdout=out, stderr=err,
-                                  start_new_session=True) as proc:
+        with (
+            (run_dir / "events.jsonl").open("wb") as out,
+            (run_dir / "stderr.txt").open("wb") as err,
+        ):
+            with subprocess.Popen(
+                argv,
+                cwd=repo,
+                stdin=subprocess.PIPE,
+                stdout=out,
+                stderr=err,
+                start_new_session=True,
+            ) as proc:
                 try:
                     return wait_for(proc, prompt, run_dir)
                 except (subprocess.TimeoutExpired, Stopped) as exc:
                     # A stop from Claude Code signals the whole process tree
                     # at once, so Codex may already be dead. Not yet reaped,
                     # macOS reports EPERM for its group; once reaped, ESRCH.
-                    with contextlib.suppress(PermissionError,
-                                             ProcessLookupError):
+                    with contextlib.suppress(
+                        PermissionError, ProcessLookupError
+                    ):
                         os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
                     if isinstance(exc, Stopped):
                         raise ReviewerError(
                             f"The runner was stopped ({exc}); Codex was "
-                            "killed.") from exc
+                            "killed."
+                        ) from exc
                     raise ReviewerError(
                         f"Codex timed out after {TIMEOUT_SECONDS // 60} "
-                        "minutes and was killed.") from exc
+                        "minutes and was killed."
+                    ) from exc
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
@@ -151,16 +166,23 @@ def wait_for(proc: subprocess.Popen, prompt: str, run_dir: Path) -> int:
 def report_progress(run_dir: Path, elapsed: float) -> None:
     """Print a progress line on stderr, with none of Codex's text (D10)."""
     events = (run_dir / "events.jsonl").read_text(errors="replace")
-    done = sum(1 for line in events.splitlines()
-               if '"item.completed"' in line and '"command_execution"' in line)
+    done = sum(
+        1
+        for line in events.splitlines()
+        if '"item.completed"' in line and '"command_execution"' in line
+    )
     minutes, seconds = divmod(round(elapsed), 60)
-    print(f"xreview: {DISPLAY_NAME} still working — {minutes}m {seconds}s, "
-          f"{done} command{'' if done == 1 else 's'} run",
-          file=sys.stderr, flush=True)
+    print(
+        f"xreview: {DISPLAY_NAME} still working — {minutes}m {seconds}s, "
+        f"{done} command{'' if done == 1 else 's'} run",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
-def parse(run_dir: Path, expected_session: str | None = None
-          ) -> tuple[str, str]:
+def parse(
+    run_dir: Path, expected_session: str | None = None
+) -> tuple[str, str]:
     """Check the event stream and return (session_id, reply).
 
     A top-level "error" event isn't fatal when the turn completed: Codex
@@ -185,21 +207,25 @@ def parse(run_dir: Path, expected_session: str | None = None
             error = event.get("error")
             detail = error.get("message") if isinstance(error, dict) else None
             raise ReviewerError(f"Codex reported a failed turn: {detail}.")
-    started = [e.get("thread_id") for e in events
-               if e.get("type") == "thread.started"]
+    started = [
+        e.get("thread_id") for e in events if e.get("type") == "thread.started"
+    ]
     completed = [e for e in events if e.get("type") == "turn.completed"]
     if len(started) != 1 or len(completed) != 1:
         raise ReviewerError(
             f"Codex sent {len(started)} thread.started and {len(completed)} "
-            "turn.completed events; expected exactly one of each.")
+            "turn.completed events; expected exactly one of each."
+        )
     try:
         session = str(uuid.UUID(started[0]))
     except (ValueError, TypeError, AttributeError) as exc:
         raise ReviewerError(
-            "Codex did not return a valid session UUID.") from exc
+            "Codex did not return a valid session UUID."
+        ) from exc
     if expected_session and session != expected_session:
         raise ReviewerError(
-            "Codex resumed a different session; refusing its result.")
+            "Codex resumed a different session; refusing its result."
+        )
     response = run_dir / "response.md"
     reply = response.read_text(encoding="utf-8") if response.exists() else ""
     if not reply.strip():

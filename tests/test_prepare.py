@@ -30,8 +30,11 @@ def test_creates_state_header_and_summary(repo):
     assert result.returncode == 0, result.stderr
     review = repo.path / ".reviews" / "main"
     state = json.loads((review / "state.json").read_text())
-    assert state == {"base": repo.base, "reviewed_head": repo.head,
-                     "reviewer_session_id": None}
+    assert state == {
+        "base": repo.base,
+        "reviewed_head": repo.head,
+        "reviewer_session_id": None,
+    }
     assert (review / "messages").is_dir()
     header = (review / "transcript.md").read_text()
     assert header.startswith(
@@ -40,10 +43,16 @@ def test_creates_state_header_and_summary(repo):
         "- Reviewer: Codex (codex-cli 0.0.0-fake)\n"
         f"- Base: {repo.base} — Base commit\n"
         f"- Reviewed head: {repo.head} — Extend a\n"
-        "- Started: "), header
+        "- Started: "
+    ), header
     assert header.endswith("\n\n---\n\n")
-    for expected in ("`.reviews/main/`", "Add b", "Extend a",
-                     "A\tb.txt", "M\ta.txt"):
+    for expected in (
+        "`.reviews/main/`",
+        "Add b",
+        "Extend a",
+        "A\tb.txt",
+        "M\ta.txt",
+    ):
         assert expected in result.stdout
 
 
@@ -76,11 +85,15 @@ def test_uncommitted_tracked_edits_are_refused(repo, staged):
     assert not (repo.path / ".reviews").exists()
 
 
-@pytest.mark.parametrize("case, reason", [("missing", "not found on PATH"),
-                                          ("broken", "broken install")])
+@pytest.mark.parametrize(
+    "case, reason",
+    [("missing", "not found on PATH"), ("broken", "broken install")],
+)
 def test_codex_missing_or_broken_is_refused(repo, case, reason):
-    env = {"missing": {"PATH": str(repo.tools)},
-           "broken": {"FAKE_CODEX_CASE": "exit"}}[case]
+    env = {
+        "missing": {"PATH": str(repo.tools)},
+        "broken": {"FAKE_CODEX_CASE": "exit"},
+    }[case]
     result = repo.xreview("prepare", repo.base, **env)
     assert result.returncode == 1
     assert reason in result.stderr
@@ -186,15 +199,18 @@ def test_tree_check(repo, review):
     later = repo.commit("c.txt", "new\n", "Later commit")
     result = check(repo, review)
     assert result.returncode == 1
-    assert (f"HEAD has moved since prepare (reviewed {repo.head[:7]}, now "
-            f"{later[:7]}). This review covers {repo.head[:7]} only. To "
-            "review the new commits, re-run code-prepare in the session "
-            "that wrote the code.") in result.stderr
+    assert (
+        f"HEAD has moved since prepare (reviewed {repo.head[:7]}, now "
+        f"{later[:7]}). This review covers {repo.head[:7]} only. To "
+        "review the new commits, re-run code-prepare in the session "
+        "that wrote the code."
+    ) in result.stderr
 
 
 @pytest.mark.parametrize("quoted", [False, True], ids=["reflowed", "quoted"])
-def test_prompt_check_accepts_reflowed_and_blockquoted_copies(repo, review,
-                                                              quoted):
+def test_prompt_check_accepts_reflowed_and_blockquoted_copies(
+    repo, review, quoted
+):
     intro, *bullets = BLOCK.split(" - ")
     parts = [textwrap.fill(part, 72) for part in [intro, *bullets]]
     block = "\n- ".join(parts)
@@ -210,16 +226,19 @@ def test_prompt_check_accepts_seven_character_prefixes(repo, review):
     assert check(repo, review).returncode == 0
 
 
-@pytest.mark.parametrize("case, message", [
-    ("paraphrased", "Simplification block"),
-    ("no base", "base commit"),
-    ("short base", "base commit"),
-])
-def test_prompt_check_rejects_paraphrase_and_missing_commits(repo, review,
-                                                             case, message):
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("paraphrased", "Simplification block"),
+        ("no base", "base commit"),
+        ("short base", "base commit"),
+    ],
+)
+def test_prompt_check_rejects_paraphrase_and_missing_commits(
+    repo, review, case, message
+):
     block, shas = {
-        "paraphrased": (BLOCK.replace("deleting them", "removing them"),
-                        None),
+        "paraphrased": (BLOCK.replace("deleting them", "removing them"), None),
         "no base": (BLOCK, (repo.head,)),
         "short base": (BLOCK, (repo.base[:6], repo.head)),
     }[case]
@@ -248,8 +267,9 @@ def test_unknown_review_is_refused(repo, name):
 
 def test_fills_base_and_head(repo):
     review = repo.prepare()
-    result = repo.xreview("prompt", review.name,
-                          "--template", "code/reviewer-prompt-guide")
+    result = repo.xreview(
+        "prompt", review.name, "--template", "code/reviewer-prompt-guide"
+    )
     assert result.returncode == 0, result.stderr
     guide = ROOT / "templates/code/reviewer-prompt-guide.md"
     expected = guide.read_text().replace("{base}", repo.base)
@@ -285,17 +305,20 @@ def test_every_template_a_skill_names_exists():
 def test_templates_outside_templates_folder_are_refused(repo, kind):
     secret = repo.tmp / "secret"
     secret.with_suffix(".md").write_text("SECRET\n")
-    name = {"absolute": str(secret),
-            "relative": os.path.relpath(secret, ROOT / "templates"),
-            "missing": "code/no-such-template"}[kind]
+    name = {
+        "absolute": str(secret),
+        "relative": os.path.relpath(secret, ROOT / "templates"),
+        "missing": "code/no-such-template",
+    }[kind]
     result = repo.xreview("prompt", "--template", name)
     assert result.returncode == 1
     assert "SECRET" not in result.stdout
     assert "no template" in result.stderr
 
 
-@pytest.mark.parametrize("args", [("prepare",), ("bogus",),
-                                  ("prompt", "main")])
+@pytest.mark.parametrize(
+    "args", [("prepare",), ("bogus",), ("prompt", "main")]
+)
 def test_usage_errors_exit_2(repo, args):
     assert repo.xreview(*args).returncode == 2
 
@@ -313,16 +336,19 @@ def run_with(repo, tools: dict[str, str]):
     for name, text in tools.items():
         (folder / name).write_text(text)
         (folder / name).chmod(0o755)
-    return repo.xreview("prompt", "--template", "shared/protocol",
-                        PATH=str(folder))
+    return repo.xreview(
+        "prompt", "--template", "shared/protocol", PATH=str(folder)
+    )
 
 
 @pytest.mark.parametrize("found", ["python3.N on PATH", "uv's choice"])
 def test_skips_a_python_that_is_too_old(repo, found):
     good = f'#!/bin/sh\nexec "{sys.executable}" "$@"\n'
     uv = f'#!/bin/sh\necho "{repo.tools / "python3"}"\n'
-    tools = {"python3.N on PATH": {"python3.12": good},
-             "uv's choice": {"uv": uv}}[found]
+    tools = {
+        "python3.N on PATH": {"python3.12": good},
+        "uv's choice": {"uv": uv},
+    }[found]
     result = run_with(repo, {"python3": TOO_OLD, **tools})
     assert result.returncode == 0, result.stderr
 

@@ -71,8 +71,12 @@ def append(review: Path, heading: str, body: str, meta: str) -> None:
 def attempt(review: Path, heading: str) -> int:
     """1 the first time a message is sent under heading, 2 for a retry..."""
     lines = (review / TRANSCRIPT).read_text(encoding="utf-8").splitlines()
-    sent = [line for line in lines if line == f"## {heading}"
-            or line.startswith(f"## {heading} (attempt ")]
+    sent = [
+        line
+        for line in lines
+        if line == f"## {heading}"
+        or line.startswith(f"## {heading} (attempt ")
+    ]
     return len(sent) + 1
 
 

@@ -30,8 +30,14 @@ def write_exe(path: Path, text: str) -> None:
 
 
 def run_git(repo: Path, env: dict, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=repo, env=env, check=True,
-                            capture_output=True, text=True)
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return result.stdout
 
 
@@ -64,8 +70,9 @@ def shared(tmp_path_factory: pytest.TempPathFactory) -> Shared:
         folder.mkdir()
     (tools / "git").symlink_to(shutil.which("git"))
     write_exe(tools / "python3", f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
-    write_exe(codex_dir / "codex",
-              f'#!/bin/sh\nexec python3 "{FAKE_CODEX}" "$@"\n')
+    write_exe(
+        codex_dir / "codex", f'#!/bin/sh\nexec python3 "{FAKE_CODEX}" "$@"\n'
+    )
     env = {
         **os.environ,
         "PATH": f"{codex_dir}:{tools}",
@@ -102,11 +109,16 @@ class Repo:
     def commit(self, path: str, text: str, message: str) -> str:
         return commit(self.path, self.env, path, text, message)
 
-    def xreview(self, *args: str, cwd: Path | None = None,
-                **env: str) -> subprocess.CompletedProcess:
-        return subprocess.run([str(XREVIEW), *args], cwd=cwd or self.path,
-                              env={**self.env, **env},
-                              capture_output=True, text=True)
+    def xreview(
+        self, *args: str, cwd: Path | None = None, **env: str
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(XREVIEW), *args],
+            cwd=cwd or self.path,
+            env={**self.env, **env},
+            capture_output=True,
+            text=True,
+        )
 
     def prepare(self, *args: str) -> Path:
         """Run prepare on the base commit; return the review folder."""
@@ -116,12 +128,14 @@ class Repo:
         (review,) = set((self.path / ".reviews").glob("*")) - before
         return review
 
-    def write_prompt(self, review: Path, block: str,
-                     shas: tuple[str, ...] | None = None) -> None:
+    def write_prompt(
+        self, review: Path, block: str, shas: tuple[str, ...] | None = None
+    ) -> None:
         refs = " and ".join(shas or (self.base, self.head))
         (review / "reviewer-prompt.md").write_text(
             f"Review the commits {refs}.\n\n{block}\n\n"
-            "You have read-only access.\n")
+            "You have read-only access.\n"
+        )
 
 
 @pytest.fixture
