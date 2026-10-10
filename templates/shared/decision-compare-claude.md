@@ -1,4 +1,4 @@
-Below is the reviewer's latest view on the open decisions. Compare it item by item with your current recommendation on each. In the first round, that's the ranking you wrote before seeing the reviewer's.
+Below is the reviewer's latest view on the open decisions. Compare it item by item with your current recommendation on each. In a ranking round, that's the ranking you wrote before seeing the reviewer's.
 
 For each item:
   AGREE — same top option. One line.
