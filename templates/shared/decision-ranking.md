@@ -1,0 +1,1 @@
+For each open item below, give the solutions ranked from best to worst, give the pros and cons of each option, give your recommendation and explain your reasoning. If it's a coin flip, say so. If there's genuinely only one good option, say so.
