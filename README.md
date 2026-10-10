@@ -2,7 +2,7 @@
 
 xreview is a Claude Code plugin that runs a code-review debate between Claude and Codex, with no copying and pasting between them. Codex reviews your committed changes, a fresh Claude session rebuts the review, the same Codex session responds, and Claude writes a plan. You then decide the open items, optionally after both models rank them independently, and Claude implements the decided plan as a small series of commits.
 
-Every message sent to Codex, and every answer it gives, is kept word for word in a Markdown transcript inside your project, which is never committed.
+Every message sent to Codex, and every answer xreview accepts, is kept word for word in a Markdown transcript inside your project, which is never committed.
 
 ## How a review runs
 
@@ -101,7 +101,7 @@ When you give your decisions, or say to finalize, Claude writes `.reviews/<name>
 
 Run `/xreview:code-implement <name>` in Session B, or in a fresh session if Session B's context is long. It works only from `decided-plan.md`:
 
-- one commit per group, in order, staged by explicit path, with the subject line `<summary> (xreview <name>, group <n>)`;
+- one commit per group, in order, staged by explicit path, with a subject line that follows your repository's convention and ends in `(xreview <name>, group <n>)`;
 - then your project's test command, with fixes for any failures in extra commits;
 - then a **Final Changes** section in the transcript: each commit, the test result, what was deferred or dropped, and any departures from the plan.
 
