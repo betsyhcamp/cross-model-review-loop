@@ -122,7 +122,7 @@ Most of Session B runs in later turns: a turn starts when a background Codex cal
    }
    ```
 
-   The rule approves only `xreview` commands, in every session, and writes nothing to your project. It doesn't cover Claude's file writes, which is why Session B also needs Edit automatically mode. In Manual mode it still stops at each write.
+   The rule approves only `xreview` commands, in every session. It lives in your user settings, not in your project. It doesn't cover Claude's file writes, which is why Session B also needs Edit automatically mode. In Manual mode it still stops at each write.
 
 **Choosing the mode:**
 - **Terminal:** start with `claude --permission-mode acceptEdits`, or press Shift+Tab until the status bar shows `⏵⏵ accept edits on`.
@@ -173,7 +173,7 @@ Use a local-folder marketplace, which loads the plugin in place from your clone:
 /plugin install xreview@cross-model-review-loop
 ```
 
-- Edits take effect in the next session or after `/reload-plugins`. A skill already invoked keeps the text it loaded, so check a skill change in a new session.
+- To pick up an edit, restart Claude Code or run `/reload-plugins`. `/clear` doesn't reload a plugin's skill text. A skill already invoked keeps the text it loaded, so check a skill change in a new conversation after reloading.
 - **Don't use `claude --plugin-dir .` in this repository.** Claude Code makes a `--plugin-dir` folder a protected path, so every write in the repository then asks for permission or goes to auto mode's classifier.
 - A marketplace name can be registered only once, and the GitHub and local marketplaces share the name `cross-model-review-loop`. To switch between them, remove one first with `/plugin marketplace remove cross-model-review-loop`, which also uninstalls the plugin, then add the other and install again.
 
