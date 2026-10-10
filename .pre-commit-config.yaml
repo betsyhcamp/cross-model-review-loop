@@ -1,0 +1,40 @@
+# Pre-commit handles file utilities; Taskfile handles linting and formatting.
+# `task check` runs these hooks on all files, then the tests and plugin
+# validation.
+
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  # ============== File Utilities (native pre-commit) ==============
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      # Markdown is excluded: skills and prompt templates must stay as written.
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ["--unsafe"]
+      - id: check-toml
+      - id: check-json
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+
+  # ============== Project Checks (delegate to Taskfile) ==============
+  - repo: local
+    hooks:
+      - id: task-lint
+        name: task lint
+        entry: task lint
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: task-format-check
+        name: task format-check
+        entry: task format-check
+        language: system
+        pass_filenames: false
+        types: [python]

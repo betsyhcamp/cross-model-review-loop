@@ -1,0 +1,12 @@
+{
+  "name": "cross-model-review-loop",
+  "owner": { "name": "Elizabeth H. Camp" },
+  "description": "Cross-model review loop between Claude Code and Codex.",
+  "plugins": [
+    {
+      "name": "xreview",
+      "source": "./",
+      "description": "Cross-model code review between Claude Code and Codex, with a Markdown transcript."
+    }
+  ]
+}
