@@ -20,6 +20,15 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.33"
+
+      # A Python that uv downloads gets a minor-version link (cpython-3.12).
+      # pre-commit-uv builds hook environments through it that record 3.12,
+      # and pre-commit's health check then rejects them against the real
+      # 3.12.9. Requesting the exact version avoids the link.
+      - name: Use the Python in .python-version
+        run: echo "UV_PYTHON=$(cat .python-version)" >> "$GITHUB_ENV"
 
       - name: Install Task
         uses: arduino/setup-task@v2
@@ -65,6 +74,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.33"
 
       - name: Install Task
         uses: arduino/setup-task@v2
