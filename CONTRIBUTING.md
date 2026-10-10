@@ -24,7 +24,7 @@ task install    # uv sync (Python 3.12 with pytest, ruff and pre-commit), then t
 task check      # pre-commit on all files, the tests on 3.12 and 3.10, plugin validation
 ```
 
-`task --list` shows each step on its own: `lint`, `format`, `format-check`, `test`, `test-min` and `validate`. The tests use a fake Codex and make no model calls. On each commit, the git hook checks file hygiene, runs ruff's linter and checks the formatting.
+`task --list` shows each step on its own: `lint`, `format`, `format-check`, `test`, `test-min` and `validate`. The tests use a fake Codex and make no model calls. On each commit, the git hook checks file hygiene, runs ruff's linter and checks the formatting. GitHub Actions runs the same checks on every pull request, on Ubuntu and macOS.
 
 ## How the launcher finds Python
 

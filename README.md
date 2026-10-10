@@ -1,5 +1,7 @@
 # xreview
 
+[![CI](https://github.com/betsyhcamp/cross-model-review-loop/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/betsyhcamp/cross-model-review-loop/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg) [![License: MIT](https://img.shields.io/badge/license-MIT-cyan.svg)](LICENSE)
+
 `xreview` is a Claude Code plugin that runs a code review debate between Claude and Codex, with no copying and pasting between them. You decide on the open items that couldn't be resolved during the review. For any open decision items, you can optionally have both models rank possible solutions, explain if it's a coin flip, or say there's genuinely only one good solution. Claude proposes a plan and implements the plan you've approved as a small series of commits.
 
 Every message sent to Codex, and every answer `xreview` accepts, is kept word for word in a Markdown transcript inside your project.
