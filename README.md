@@ -177,14 +177,14 @@ Use a local-folder marketplace, which loads the plugin in place from your clone:
 - **Don't use `claude --plugin-dir .` in this repository.** Claude Code makes a `--plugin-dir` folder a protected path, so every write in the repository then asks for permission or goes to auto mode's classifier.
 - A marketplace name can be registered only once, and the GitHub and local marketplaces share the name `cross-model-review-loop`. To switch between them, remove one first with `/plugin marketplace remove cross-model-review-loop`, which also uninstalls the plugin, then add the other and install again.
 
-Tests and lint need [uv](https://docs.astral.sh/uv/). None of this is needed to use the plugin.
+Development needs [uv](https://docs.astral.sh/uv/) and [Task](https://taskfile.dev) (`brew install go-task`). None of this is needed to use the plugin.
 
 ```sh
-uv sync                                   # Python 3.12 dev environment: pytest and ruff
-uv run pytest                             # the tests, with a fake Codex; no model calls
-uv run --isolated --python 3.10 pytest    # the same on the minimum Python
-uv run ruff check xreview tests
+task install    # uv sync (Python 3.12 with pytest, ruff and pre-commit), then the git hook
+task check      # pre-commit on all files, the tests on 3.12 and 3.10, plugin validation
 ```
+
+`task --list` shows each step on its own: `lint`, `format`, `format-check`, `test`, `test-min` and `validate`. The tests use a fake Codex and make no model calls. On each commit, the git hook checks file hygiene, runs ruff's linter and checks the formatting.
 
 ## Future directions
 

@@ -1,0 +1,60 @@
+version: '3'
+
+tasks:
+  # ===========================================
+  # DEPENDENCIES
+  # ===========================================
+  install:
+    desc: Install the development environment and the git hook
+    cmds:
+      - uv sync
+      - uv run pre-commit install
+
+  # ===========================================
+  # FILE UTILITIES (delegates to pre-commit)
+  # ===========================================
+  pre-commit:
+    desc: Run pre-commit hooks on all files
+    cmds:
+      - uv run pre-commit run --all-files
+
+  # ===========================================
+  # PROJECT CHECKS (single source of truth)
+  # ===========================================
+  lint:
+    desc: Run ruff linter
+    cmds:
+      - uv run ruff check --no-cache xreview tests
+
+  format:
+    desc: Format code with ruff
+    cmds:
+      - uv run ruff format --no-cache xreview tests
+
+  format-check:
+    desc: Check code formatting with ruff
+    cmds:
+      - uv run ruff format --no-cache --check xreview tests
+
+  test:
+    desc: Run tests on the development Python
+    cmds:
+      - uv run pytest
+
+  test-min:
+    desc: Run tests on the minimum supported Python, 3.10
+    cmds:
+      - uv run --isolated --python 3.10 pytest
+
+  validate:
+    desc: Validate the plugin manifests and skill frontmatter
+    cmds:
+      - claude plugin validate .
+
+  check:
+    desc: Run all checks
+    cmds:
+      - task: pre-commit
+      - task: test
+      - task: test-min
+      - task: validate
