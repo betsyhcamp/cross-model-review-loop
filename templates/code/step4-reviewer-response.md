@@ -30,6 +30,10 @@ the remedy independently of the finding:
     This is a complete answer. Do not break the tie for the sake of
     breaking it. If you think it isn't a toss-up, use RERANK instead.
 
+  If the author ranked options you think are a toss-up, say it's a coin
+  flip instead of endorsing or reranking. If only one listed option is
+  genuinely good, say so, and why the others aren't viable.
+
 Also flag any option whose pros or cons are mis-stated, even if you
 endorse the ranking overall.
 
