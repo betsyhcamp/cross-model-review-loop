@@ -8,9 +8,9 @@ allowed-tools: Bash(xreview *)
 # Cross-model code review (Session B)
 
 Review name: $0
-Option: $1
+Arguments: $ARGUMENTS
 
-This is Session B, a fresh session that runs the review debate with Codex. If no review name was passed to this command, ask the user for it and stop. If the review name above starts with `--`, tell the user to put the review name first, and stop. The only option is `--no-decision-rounds`. If anything else follows the review name, tell the user that, and stop.
+This is Session B, a fresh session that runs the review debate with Codex. If no review name was passed to this command (the arguments above are empty), ask the user for it and stop. If the review name starts with `--`, tell the user to put the review name first, and stop. The only option is `--no-decision-rounds`, after the review name. If the arguments hold anything else after the review name, tell the user that, and stop.
 
 First run `xreview prompt --template shared/protocol` and follow it.
 
