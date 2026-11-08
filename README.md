@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/betsyhcamp/cross-model-review-loop/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/betsyhcamp/cross-model-review-loop/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg) [![License: MIT](https://img.shields.io/badge/license-MIT-cyan.svg)](LICENSE)
 
-`xreview` is a Claude Code plugin that runs a code review debate between Claude and Codex, with no copying and pasting between them. You decide on the open items that couldn't be resolved during the review. For any open decision items, you can optionally have both models rank possible solutions, explain if it's a coin flip, or say there's genuinely only one good solution. Claude proposes a plan and implements the plan you've approved as a small series of commits.
+`xreview` is a Claude Code plugin that runs a code review debate between Claude and Codex, with no copying and pasting between them. You decide on the open items that couldn't be resolved during the review. For each open decision, Claude and Codex come up with solutions and rank them independently, and Claude merges them into one ranked set, saying when it's a coin flip or there's genuinely only one good solution. Claude proposes a plan and implements the plan you've approved as a small series of commits.
 
 Every message sent to Codex, and every answer `xreview` accepts, is kept word for word in a Markdown transcript inside your project.
 
@@ -16,9 +16,9 @@ Every message sent to Codex, and every answer `xreview` accepts, is kept word fo
 2. Codex reviews the code while Claude reads the handoff.
 3. Claude rebuts the review from Codex.
 4. The same Codex session that gave the initial review responds.
-5. Claude writes a final plan and stops for you.
+5. Claude writes a final plan.
 
-**III. Decision rounds**, only when you ask: Claude and Codex rank the open decisions independently, Claude compares the two, and stops. You can ask for more rounds.
+**III. Decision rounds**: right after the plan, Claude and Codex rank solutions for the open decisions independently, Claude merges the two into one ranked set of options, and stops for you. You can ask for more rounds.
 
 **IV. Finalize decisions**: when you give your decisions, Claude writes `decided-plan.md`.
 
@@ -75,17 +75,26 @@ Open a **new** Claude Code session in the same repository, and run the command S
 /xreview:code-review feat-my-branch
 ```
 
-Session B stops at the Step 5 plan and shows it, with the path to the transcript.
+Session B writes the Step 5 plan, runs the first decision round on its open decisions, and stops. It shows you the plan and the options, with the path to the transcript.
+
+To stop at the plan instead, add `--no-decision-rounds`. Session B then ranks the open decisions on its own, with no Codex call, and you can still ask for a round:
+
+```text
+/xreview:code-review feat-my-branch --no-decision-rounds
+```
 
 ### Decision rounds and the Decided Plan
 
-At the Step 5 stop, you can talk through the open decisions with one model or have a cross model interchange round on the open decisions. For example:
+Part 3 of the plan describes each open decision, up to seven, without suggesting solutions, so Codex comes up with its own. In the first decision round, Codex ranks solutions for every open decision while Claude ranks them on its own, without looking at Codex's answer. Claude then merges the two into **Part 4, Options for the open decisions**: every option from both, plus any new one, ranked best to worst with pros and cons, a recommendation, and a call when it's a coin flip or there's only one good option. Each option is tagged by where it came from (both, Claude, Codex or new), and each decision says whether the two top picks matched.
 
-- **"Get Codex's take on 2 and 4"** starts a ranking round. Codex ranks those decisions while Claude ranks them on its own, without looking at Codex's answer. Claude then compares the two rankings and stops. Add "My question: …" to send Codex a question word for word.
-- **"Another round on those"** starts a follow-up round. Claude's comparison goes back to Codex, and Claude compares again.
-- **A decision no round has ranked yet** gets its own ranking round.
+After that, you can talk the decisions through with Claude, or bring Codex back in. For example:
 
-When you give your decisions, or say to finalize, Claude writes `.reviews/<name>/decided-plan.md`: your decisions, the groups to implement in order, and what's deferred or dropped. Unanswered decisions take their stated default. If the plan has **more than 15 groups**, Claude warns you before recording it and offers three choices: proceed, defer lower-priority groups, or split off a follow-up change.
+- **"Ask Codex about 3: what about the migration cost?"** starts a follow-up round. Codex gets Part 4 for that decision and your question word for word, and Claude writes an updated Part 4. The latest Part 4 counts.
+- **A decision no round has ranked yet**, such as a default you want decided, gets its own ranking round.
+
+With `--no-decision-rounds`, Part 4 is Claude's ranking alone, at the end of the plan. Asking for Codex's take on a decision then runs its ranking round, using Claude's Part 4 as Claude's side.
+
+When you give your decisions, or say to finalize, Claude writes `.reviews/<name>/decided-plan.md`: your decisions, the groups to implement in order, and what's deferred or dropped. Unanswered decisions take Claude's latest recommendation, the top option in the latest Part 4. If the plan has **more than 15 groups**, Claude warns you before recording it and offers three choices: proceed, defer lower-priority groups, or split off a follow-up change.
 
 ### Implement
 
