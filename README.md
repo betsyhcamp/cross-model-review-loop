@@ -127,6 +127,8 @@ There are two ways to let it run on its own:
 
 `code-implement` in Edit automatically mode still asks before running your test command, because no rule can cover every project's command.
 
+Session B may also run short, harmless checks to settle a question. Edit automatically mode stops at each one for your approval; Auto mode usually doesn't.
+
 ## While Codex is working
 
 - **Progress.** Every 30 seconds the runner prints a line such as `xreview: Codex still working — 2m 30s, 4 commands run`.
