@@ -12,8 +12,9 @@ FIRST — does the finding hold?
   UPHELD — the finding stands. Point to the specific lines or control
     flow the response doesn't account for. Restating your original
     reasoning is not sufficient; engage with the counterargument.
-  EMPIRICAL — can't be settled by reading. Give the exact test, command,
-    or input that decides it, and what each outcome would mean.
+  EMPIRICAL — you tried to settle it and couldn't. Say what you tried,
+    then give the exact test, command, or input that decides it, and what
+    each outcome would mean.
   AGREED — was never contested.
 
 SECOND — for anything UPHELD or AGREED that has ranked options, assess
@@ -29,6 +30,10 @@ the remedy independently of the finding:
   CONFIRMED COIN FLIP — the author called it a toss-up and you agree.
     This is a complete answer. Do not break the tie for the sake of
     breaking it. If you think it isn't a toss-up, use RERANK instead.
+
+  If the author ranked options you think are a toss-up, say it's a coin
+  flip instead of endorsing or reranking. If only one listed option is
+  genuinely good, say so, and why the others aren't viable.
 
 Also flag any option whose pros or cons are mis-stated, even if you
 endorse the ranking overall.

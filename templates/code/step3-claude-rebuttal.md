@@ -10,7 +10,8 @@ Label each one:
   Incorrect: the claim doesn't hold, give the evidence
   Correct but missing context: accurate about the code, but handled
     elsewhere or a deliberate tradeoff
-  Unverifiable: can't be settled without running something; say what
+  Unverifiable: you tried to settle it and couldn't; say what you tried
+    and what would settle it
 
 Then assign severity: correctness/security, performance,
 maintainability, or style/preference.
