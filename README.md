@@ -94,7 +94,7 @@ After that, you can talk the decisions through with Claude, or bring Codex back 
 
 With `--no-decision-rounds`, Part 4 is Claude's ranking alone, at the end of the plan. Asking for Codex's take on a decision then runs its ranking round, using Claude's Part 4 as Claude's side.
 
-When you give your decisions, or say to finalize, Claude writes `.reviews/<name>/decided-plan.md`: your decisions, the groups to implement in order, and what's deferred or dropped. Unanswered decisions take Claude's latest recommendation, the top option in the latest Part 4. If the plan has **more than 15 groups**, Claude warns you before recording it and offers three choices: proceed, defer lower-priority groups, or split off a follow-up change.
+When you give your decisions, or say to finalize, Claude writes `.reviews/<name>/decided-plan.md`: your decisions, the groups to implement in order, and what's deferred or dropped. Unanswered decisions take Claude's latest recommendation, the top option in the latest Part 4. If that option needs something only you know, Part 4 says "Needs from you", and an unanswered decision is deferred with no change made. If the plan has **more than 15 groups**, Claude warns you before recording it and offers three choices: proceed, defer lower-priority groups, or split off a follow-up change.
 
 ### Implement
 
