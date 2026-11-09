@@ -13,8 +13,9 @@ PART 1 — Resolution. Keep this tight; most items are settled.
   MAINTAINED — you still disagree. This is a legitimate outcome and I'd
     rather have a real disagreement than a manufactured consensus. State
     what would change your mind, and what breaks if you're wrong.
-  EMPIRICAL — give the exact command or test that settles it, plus what
-    you expect the result to be, so I can interpret it in one glance.
+  EMPIRICAL — you tried to settle it and couldn't. Say what you tried,
+    then give the exact command or test that settles it, plus what you
+    expect the result to be, so I can interpret it in one glance.
 
   Where the reviewer reranked your options or proposed a different fix,
   respond on the remedy separately from the finding. Accepting that a bug

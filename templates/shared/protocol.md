@@ -5,6 +5,7 @@ These rules apply to every xreview skill for the rest of this session. `<name>` 
 - `xreview` is a command on your PATH. Run it as a bare command. Don't look for its source, templates or install folder.
 - When a step says to follow `xreview prompt ...`, run that command and treat the text it prints as the instructions for that step.
 - During the debate and decision rounds, change no file outside `.reviews/<name>/`.
+- If something you need to know can be found out, find it out before answering: read the code, run something harmless, or look it up in public sources. Say what you did and what you found. Only if you can't, say what would settle it. Harmless means it changes nothing in the repo, installs nothing, touches no real service or credentials, and finishes quickly. Keep searches generic, with no project code or names.
 - Don't read other reviews' folders under `.reviews/`.
 - Read files with your file-reading tool, not by printing them in Bash.
 - Paths you give with `--body` or `--file` are relative to `.reviews/<name>/`. Put each `--body` file in `messages/`.
