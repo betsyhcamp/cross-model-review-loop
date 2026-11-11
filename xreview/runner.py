@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 import uuid
@@ -41,7 +42,11 @@ ANSWER_LIMIT = 2000
 OPERATIONS = {
     "ask-claude": "Question {n} for Claude",
     "ask-codex": "Question {n} for Codex",
+    "rank": "Ranking request {n}",
+    "finalize": "Finalize {n}",
 }
+GROUP_LIMIT = 15  # more groups than this is held for the developer (D15)
+DECIDED_PLAN = "Decided Plan"
 
 
 def crash(point: str) -> None:
@@ -62,6 +67,17 @@ def listing(numbers: list[int]) -> str:
         return f"decision {numbers[0]}"
     head = ", ".join(str(n) for n in numbers[:-1])
     return f"decisions {head} and {numbers[-1]}"
+
+
+def groups(plan: str) -> int:
+    """The `### Group` headings under Implement now."""
+    start = re.search(r"^## Implement now.*$", plan, re.M)
+    if not start:
+        return 0
+    rest = plan[start.end() :]
+    end = re.search(r"^## ", rest, re.M)
+    section = rest[: end.start()] if end else rest
+    return len(re.findall(r"^### Group\b", section, re.M))
 
 
 def join(*parts: str) -> str:
@@ -145,6 +161,7 @@ class Runner:
             "decisions": {},
             "counters": {},
             "dropped": [],
+            "held": None,
         }
 
     def save(self) -> None:
@@ -762,10 +779,12 @@ class Runner:
         op["words"] = f"messages/{kind}-{op['n']}-words.md"
         write_atomic(self.path(op["words"]), words)
         op["prefixes"] = [f"{kind}-{op['n']}:"]
-        if kind == "ask-codex" and self.st["decisions"]:
+        if kind == "rank" or (kind == "ask-codex" and self.st["decisions"]):
             counters["round"] = max(counters.get("round", 1), 1) + 1
             op["round"] = counters["round"]
             op["prefixes"].append(f"round-{op['round']}:")
+        if kind == "rank":
+            op["next"] = max(self.numbers(), default=0) + 1
         self.st["op"] = op
         self.save()
         transcript.append_once(
@@ -833,10 +852,13 @@ class Runner:
         self.save()
 
     def resume(self, op: dict) -> None:
-        if op["kind"] == "ask-claude":
-            self.ask_claude(op)
-        elif op["kind"] == "ask-codex":
-            self.ask_codex(op)
+        handlers = {
+            "ask-claude": self.ask_claude,
+            "ask-codex": self.ask_codex,
+            "rank": self.rank,
+            "finalize": self.finalize,
+        }
+        handlers[op["kind"]](op)
         self.st["op"] = None
         self.save()
 
@@ -892,6 +914,112 @@ class Runner:
         print(
             f"Claude merged Codex's reply into {listing(numbers)} (decision "
             f"round {n}). Report: {report}"
+        )
+
+    def rank(self, op: dict) -> None:
+        """New decisions to rank: Claude describes them in Part 3's
+        neutral style under the next numbers, then a blind ranking round
+        runs on them, with the developer's words under "My question:"."""
+        n, start = op["round"], op["next"]
+        words = self.path(op["words"]).read_text(encoding="utf-8")
+        key = f"rank-{op['n']}:describe"
+        label = f"Decision round {n} — new decisions described"
+        text = self.claude_step(
+            key,
+            f"new decision r{n}",
+            label,
+            join(self.template("runner/new-decision", next=str(start)), words),
+            f"messages/06-decisions-r{n}.md",
+        )
+        if not op.get("registered"):
+            expected = decisions.renumbered(text, start) or [
+                (start, "<title>")
+            ]
+            text, source = self.checked(
+                key, text, expected, f"fix-up new decision r{n}", label
+            )
+            self.register(text, source)
+            op["registered"], op["source"] = True, source
+            self.save()
+        text = self.path(op["source"]).read_text(encoding="utf-8")
+        numbers = [k for k, _ in decisions.headings(text)]
+        self.ranking_round(n, numbers, words)
+        report = self.write_report()
+        print(
+            f"Claude and Codex ranked new {listing(numbers)} (decision round "
+            f"{n}). Report: {report}"
+        )
+
+    def finalize(self, op: dict) -> None:
+        """A numbered Finalize turn. Its plan replaces decided-plan.md, and
+        every version stays in the transcript, unless it has more than 15
+        groups: then it's held as a draft for the developer to choose
+        what to do, and their answer goes to the next Finalize."""
+        words = self.path(op["words"]).read_text(encoding="utf-8")
+        held = self.st["held"]
+        if held:
+            prompt = join(
+                self.template(
+                    "runner/finalize-after-hold", count=str(held["groups"])
+                ),
+                words,
+            )
+        else:
+            prompt = join(self.template("runner/finalize"), words)
+        out = f"messages/finalize-{op['n']}.md"
+        plan = self.claude_step(
+            f"finalize-{op['n']}:claude",
+            f"finalize {op['n']}",
+            self.label(op),
+            prompt,
+            out,
+        )
+        if plan.strip() == "PROCEED":
+            if not held:
+                del self.st["steps"][f"finalize-{op['n']}:claude"]
+                self.save()
+                raise cli.CheckFailed(
+                    "Claude replied PROCEED, but no plan is held. Finalize "
+                    "again to ask Claude for the plan."
+                )
+            plan = self.path(held["file"]).read_text(encoding="utf-8")
+        else:
+            count = groups(plan)
+            if count > GROUP_LIMIT:
+                self.hold(op, out, count)
+                return
+        self.record_plan(plan)
+
+    def hold(self, op: dict, draft: str, count: int) -> None:
+        self.st["held"] = {"file": draft, "groups": count}
+        self.save()
+        transcript.append_once(
+            self.review,
+            f"{self.label(op)} — held",
+            f"The plan has {count} groups, more than {GROUP_LIMIT}, so it "
+            f"wasn't recorded. The draft is in `{draft}`.",
+            transcript.now(),
+        )
+        path = Path.cwd() / self.path(draft)
+        print(
+            f"This plan has {count} groups, more than {GROUP_LIMIT}, which "
+            "usually means the change is too big for one review. Choose "
+            f"one: 1. Proceed with all {count} groups. 2. Defer "
+            "lower-priority groups. 3. Split off a follow-up change.\n"
+            f"The draft isn't recorded yet. It's in: {path}"
+        )
+
+    def record_plan(self, plan: str) -> None:
+        path = self.review / "decided-plan.md"
+        write_atomic(path, plan)
+        transcript.append_once(
+            self.review, DECIDED_PLAN, plan, transcript.now()
+        )
+        self.st["held"] = None
+        self.save()
+        print(
+            f"Decided plan: {Path.cwd() / path} ({groups(plan)} groups). "
+            f"To implement it, run /xreview:code-implement {self.name}."
         )
 
     def latest_sections(self, numbers: list[int]) -> list[str]:

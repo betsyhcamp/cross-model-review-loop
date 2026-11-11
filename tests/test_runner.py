@@ -900,3 +900,157 @@ def test_a_moved_head_ends_the_stops(repo, stopped):
 def test_bad_decision_numbers_are_a_usage_error(stopped):
     result = ask(stopped, "ask-codex", 1, WORDS, "--decisions", "two")
     assert result.returncode == 2
+
+
+# --- new decisions and Finalize ----------------------------------------------
+
+
+def plan_with(groups: int, mark: str = "PLAN") -> str:
+    items = "\n".join(
+        f"### Group {i}: change {i}\n- Change: {mark} {i}"
+        for i in range(1, groups + 1)
+    )
+    return (
+        f"## User decisions\n1. First → option 1 — default accepted\n\n"
+        f"## Implement now — one commit per group, in order\n{items}\n\n"
+        "## Deferred\n- none\n\n## Dropped\n- none"
+    )
+
+
+def test_rank_describes_new_decisions_then_ranks_them_blind(stopped):
+    env = with_decisions(
+        stopped,
+        **{"new-decision": "### Decision 3: Naming\nFAKE-NEW-DESCRIPTION"},
+    )
+    words = 'How should the field be named ("dead_letter" vs "undelivered")?'
+    result = ask(stopped, "rank", 1, words, **env)
+    assert result.returncode == 0, result.stderr
+    describe = claude_call(stopped, "new-decision-r2")
+    assert (
+        "under the heading `### Decision 3: <title>`" in (describe["prompt"])
+    )
+    assert describe["prompt"].endswith(words + "\n")
+    sent = stopped.calls("codex")[-1]["stdin"]
+    assert sent.endswith(
+        "### Decision 3: Naming\nFAKE-NEW-DESCRIPTION\n\n"
+        f"My question:\n\n{words}\n"
+    )
+    assert "### Decision 1: First" not in sent
+    ranking = claude_call(stopped, "ranking-r2")
+    assert ranking["leaks"] == {"readable": [], "in_prompt": False}
+    assert stopped.headings()[-5:] == [
+        "Ranking request 1 — your words",
+        "Decision round 2 — sent to Codex",
+        "Decision round 2 — Codex ranking",
+        "Decision round 2 — Claude ranking",
+        "Decision round 2 — Claude merged options",
+    ]
+    report = (stopped.path / "report.md").read_text()
+    assert "### Decision 1: First\n_From decision round 1_" in report
+    assert "### Decision 3: Naming\n_From decision round 2_" in report
+    assert "ranked new decision 3 (decision round 2)" in result.stdout
+
+
+def test_rank_gives_several_new_decisions_the_next_numbers(stopped):
+    env = with_decisions(
+        stopped,
+        **{
+            "new-decision": "### Decision 1: A\nx\n\n### Decision 1: B\ny",
+            "fix-up-new-decision": "### Decision 3: A\nx\n\n"
+            "### Decision 4: B\ny",
+        },
+    )
+    result = ask(stopped, "rank", 1, "Two new ones.", **env)
+    assert result.returncode == 0, result.stderr
+    fix = claude_call(stopped, "fix-up-new-decision")
+    assert "### Decision 3: A\n### Decision 4: B" in fix["prompt"]
+    titles = {
+        k: v["title"] for k, v in stopped.run_state()["decisions"].items()
+    }
+    assert titles == {"1": "First", "2": "Second", "3": "A", "4": "B"}
+    assert "ranked new decisions 3 and 4" in result.stdout
+
+
+def test_finalize_records_the_plan_and_a_later_finalize_replaces_it(
+    stopped,
+):
+    env = with_decisions(
+        stopped,
+        **{
+            "finalize-1": plan_with(2, "ONE"),
+            "finalize-2": plan_with(3, "TWO"),
+        },
+    )
+    result = ask(stopped, "finalize", 1, "Take option 1 everywhere.", **env)
+    assert result.returncode == 0, result.stderr
+    decided = stopped.path / "decided-plan.md"
+    assert decided.read_text() == plan_with(2, "ONE")
+    assert result.stdout == (
+        f"Decided plan: {decided} (2 groups). To implement it, run "
+        f"/xreview:code-implement {stopped.name}.\n"
+    )
+    finalize = claude_call(stopped, "finalize-1")
+    template = (ROOT / "templates/runner/finalize.md").read_text()
+    assert finalize["prompt"] == (
+        template.rstrip("\n") + "\n\nTake option 1 everywhere.\n"
+    )
+    # Questions and rounds still work after a Finalize.
+    assert ask(stopped, "ask-claude", 2, "One more?", **env).returncode == 0
+    result = ask(stopped, "finalize", 3, "Now option 2 on the first.", **env)
+    assert result.returncode == 0, result.stderr
+    assert decided.read_text() == plan_with(3, "TWO")
+    assert stopped.headings().count("Decided Plan") == 2
+    assert "(3 groups)" in result.stdout
+
+
+def test_a_plan_over_15_groups_is_held_until_the_developer_chooses(stopped):
+    env = with_decisions(
+        stopped, **{"finalize-1": plan_with(16), "finalize-2": "PROCEED"}
+    )
+    result = ask(stopped, "finalize", 1, "Finalize.", **env)
+    assert result.returncode == 0, result.stderr
+    assert "This plan has 16 groups, more than 15" in result.stdout
+    assert "1. Proceed with all 16 groups." in result.stdout
+    assert not (stopped.path / "decided-plan.md").exists()
+    assert "Decided Plan" not in stopped.headings()
+    assert "Finalize 1 — held" in stopped.headings()
+    result = ask(stopped, "finalize", 2, "1, proceed", **env)
+    assert result.returncode == 0, result.stderr
+    after = claude_call(stopped, "finalize-2")
+    assert after["prompt"].startswith(
+        "Your last Decided Plan has 16 groups, more than 15"
+    )
+    assert after["prompt"].endswith("The developer's answer:\n\n1, proceed\n")
+    decided = stopped.path / "decided-plan.md"
+    assert decided.read_text() == plan_with(16)
+    assert stopped.headings().count("Decided Plan") == 1
+    assert "(16 groups)" in result.stdout
+
+
+def test_a_held_plan_can_be_revised_and_is_counted_again(stopped):
+    env = with_decisions(
+        stopped,
+        **{
+            "finalize-1": plan_with(17),
+            "finalize-2": plan_with(16, "AGAIN"),
+            "finalize-3": plan_with(12, "SMALLER"),
+        },
+    )
+    assert ask(stopped, "finalize", 1, "Finalize.", **env).returncode == 0
+    result = ask(stopped, "finalize", 2, "Defer some.", **env)
+    assert "This plan has 16 groups" in result.stdout
+    assert not (stopped.path / "decided-plan.md").exists()
+    result = ask(stopped, "finalize", 3, "Defer more.", **env)
+    assert "(12 groups)" in result.stdout
+    assert (stopped.path / "decided-plan.md").read_text() == (
+        plan_with(12, "SMALLER")
+    )
+    assert stopped.run_state()["held"] is None
+
+
+def test_groups_are_counted_only_under_implement_now():
+    from xreview import runner
+
+    plan = plan_with(2) + "\n\n## Notes\n### Group 9: not counted"
+    assert runner.groups(plan) == 2
+    assert runner.groups("No sections.") == 0

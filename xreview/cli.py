@@ -501,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     for command, what in (
         ("ask-claude", "send the developer's words to the review's Claude"),
         ("ask-codex", "send the developer's words to the review's Codex"),
+        ("rank", "have a new decision ranked by both reviewers"),
+        ("finalize", "have Claude write the Decided Plan"),
     ):
         p = sub.add_parser(command, help=what)
         p.add_argument("name")
