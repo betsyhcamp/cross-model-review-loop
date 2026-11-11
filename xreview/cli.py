@@ -2,7 +2,8 @@
 
 Exit codes: 0 success, 1 failed precondition or check, 2 usage error
 (argparse's own code), 3 the reviewer call failed or its response was
-rejected. Error messages go to stderr, prefixed "xreview:".
+rejected, 4 the reviewer call is uncertain: it may have run its turn.
+Error messages go to stderr, prefixed "xreview:".
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def uncommitted() -> str:
 def prepare(base: str, name: str | None) -> None:
     try:
         reviewer = f"{codex.DISPLAY_NAME} ({codex.version()})"
-    except codex.ReviewerError as exc:
+    except codex.CallFailed as exc:
         raise CheckFailed(
             f"{exc} Install with `brew install --cask codex`, "
             "then `codex login`."
@@ -337,8 +338,10 @@ def call_reviewer(
 
     Starts a session if none is stored, otherwise resumes it. The tree check
     runs again when Codex exits (D21). A failed call or a rejected response
-    gets a (FAILED) section and raises ReviewerError (exit 3). If the tree
-    changed, the section lists the changes and says to restore the tree.
+    gets a (FAILED) section and raises CallFailed (exit 3). A call that may
+    have run its turn gets an (UNCERTAIN) section and raises CallUncertain
+    (exit 4). If the tree changed, the section lists the changes and says
+    to restore the tree.
     Only a status line and the response path are printed, never the
     response itself.
     """
@@ -359,11 +362,14 @@ def call_reviewer(
             session, response = codex.start(message, Path.cwd(), run_dir)
         else:
             response = codex.resume(session, message, Path.cwd(), run_dir)
-    except codex.ReviewerError as exc:
-        error = str(exc)
+    except (codex.CallFailed, codex.CallUncertain) as exc:
+        error = exc
     changed = tree_changes(state)
     if error or changed:
-        if error:
+        uncertain = isinstance(error, codex.CallUncertain)
+        if uncertain:
+            summary = f"{codex.DISPLAY_NAME} call is uncertain: {error}"
+        elif error:
             summary = f"{codex.DISPLAY_NAME} call failed: {error}"
         else:
             summary = (
@@ -373,14 +379,18 @@ def call_reviewer(
         details = "\n\n".join(
             [summary, *changed, *restore, f"Diagnostics: `{run_dir}/`"]
         )
+        label = "UNCERTAIN" if uncertain else "FAILED"
         transcript.append(
             review,
-            f"{received} (FAILED)",
+            f"{received} ({label})",
             details,
             f"{transcript.now()} · run {run}",
         )
-        raise codex.ReviewerError(
-            f"{details}\nThe transcript has a (FAILED) section for run {run}."
+        kind = codex.CallUncertain if uncertain else codex.CallFailed
+        article = "an" if uncertain else "a"
+        raise kind(
+            f"{details}\nThe transcript has {article} ({label}) section for "
+            f"run {run}."
         )
 
     if state["reviewer_session_id"] is None:
@@ -485,7 +495,10 @@ def main(argv: list[str] | None = None) -> int:
     except CheckFailed as exc:
         print(f"xreview: {exc}", file=sys.stderr)
         return 1
-    except codex.ReviewerError as exc:
+    except codex.CallFailed as exc:
         print(f"xreview: {exc}", file=sys.stderr)
         return 3
+    except codex.CallUncertain as exc:
+        print(f"xreview: {exc}", file=sys.stderr)
+        return 4
     return 0

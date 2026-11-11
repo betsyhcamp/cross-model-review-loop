@@ -7,7 +7,9 @@ FAKE_CODEX_CASE selects the behavior: ok | exit | timeout | no_thread |
 wrong_thread | bad_uuid | dup_thread | dup_completed | turn_failed |
 incomplete | nonfatal_error | nonjson | empty | edit_tracked |
 edit_then_exit (edits a tracked file, then fails) | commit | create_untracked
-| slow (runs one command, then takes a second to finish).
+| slow (runs one command, then takes a second to finish) | active_writer
+(refuses a second writer, as codex-cli 0.160.1 does) | exit_after_start
+(starts the turn, then exits nonzero).
 
 FAKE_CODEX_LOG, if set, gets one JSON line per call with the argv, stdin and
 working folder. FAKE_CODEX_PIDS, if set, gets the pids of this process and
@@ -45,6 +47,16 @@ def emit(event: dict) -> None:
     print(json.dumps(event), flush=True)
 
 
+if case == "active_writer":
+    thread = "01a1c369-80f1-7912-9b6d-2e554b06f31b"
+    print(
+        "ERROR codex_core::session: Failed to create session: thread-store "
+        f"conflict: thread {thread} already has an active writer\n"
+        f"Error: thread/resume: thread/resume failed: thread {thread} already "
+        "has an active writer (code -32600)",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 if case == "exit":
     for i in range(1, 26):
         print(f"stderr line {i}", file=sys.stderr)
@@ -88,6 +100,9 @@ threads = {"no_thread": 0, "dup_thread": 2}.get(case, 1)
 for _ in range(threads):
     emit({"type": "thread.started", "thread_id": session})
 emit({"type": "turn.started"})
+if case == "exit_after_start":
+    print("stream disconnected", file=sys.stderr)
+    sys.exit(1)
 if case == "slow":
     emit(
         {

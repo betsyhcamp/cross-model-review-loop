@@ -94,8 +94,8 @@ def test_resume_keeps_read_only_and_the_explicit_session(repo, run_dir, call):
     assert Path(logged["cwd"]) == repo.path
 
 
-def test_wrong_session_is_refused(call):
-    with pytest.raises(codex.ReviewerError, match="different session"):
+def test_wrong_session_is_refused_as_uncertain(call):
+    with pytest.raises(codex.CallUncertain, match="different session"):
         call("wrong_thread", session=SESSION)
 
 
@@ -107,23 +107,29 @@ def test_wrong_session_is_refused(call):
         ("dup_thread", "2 thread.started"),
         ("dup_completed", "2 turn.completed"),
         ("incomplete", "0 turn.completed"),
-        ("turn_failed", "failed turn: quota exceeded"),
         ("nonjson", "isn't JSON"),
         ("empty", "empty response"),
     ],
 )
-def test_bad_event_streams_raise(run_dir, call, case, message):
-    with pytest.raises(codex.ReviewerError, match=message):
+def test_a_missing_or_unreadable_result_is_uncertain(
+    run_dir, call, case, message
+):
+    with pytest.raises(codex.CallUncertain, match=message):
         call(case)
     assert (run_dir / "events.jsonl").exists()
+
+
+def test_a_turn_codex_reports_as_failed_is_failed(call):
+    with pytest.raises(codex.CallFailed, match="failed turn: quota exceeded"):
+        call("turn_failed")
 
 
 def test_error_event_followed_by_completion_is_accepted(call):
     assert call("nonfatal_error") == (SESSION, RESPONSE)
 
 
-def test_nonzero_exit_includes_the_stderr_tail(call):
-    with pytest.raises(codex.ReviewerError) as caught:
+def test_nonzero_exit_before_the_turn_is_failed_with_the_stderr_tail(call):
+    with pytest.raises(codex.CallFailed) as caught:
         call("exit")
     lines = str(caught.value).splitlines()
     assert "Codex exited with code 7. Last lines of stderr:" in lines
@@ -132,12 +138,22 @@ def test_nonzero_exit_includes_the_stderr_tail(call):
     assert "stderr line 6" not in lines
 
 
+def test_nonzero_exit_after_the_turn_started_is_uncertain(call):
+    with pytest.raises(codex.CallUncertain, match="started the turn"):
+        call("exit_after_start")
+
+
+def test_a_refused_second_writer_is_failed(call):
+    with pytest.raises(codex.CallFailed, match="another Codex process"):
+        call("active_writer", session=SESSION)
+
+
 def test_timeout_kills_the_process_group(
     repo, call, monkeypatch, process_gone
 ):
     pids = repo.tmp / "pids"
     monkeypatch.setattr(codex, "TIMEOUT_SECONDS", 1)
-    with pytest.raises(codex.ReviewerError, match="timed out"):
+    with pytest.raises(codex.CallUncertain, match="timed out"):
         call("timeout", FAKE_CODEX_PIDS=str(pids))
     for pid in map(int, pids.read_text().split()):
         assert process_gone(pid), f"process {pid} survived"
@@ -159,6 +175,15 @@ def test_progress_lines_show_only_time_and_commands_run(
     assert lines[-1].endswith(", 1 command run")
 
 
-def test_codex_missing_raises(repo, call):
-    with pytest.raises(codex.ReviewerError, match="not found"):
+def test_codex_missing_is_failed(repo, call):
+    with pytest.raises(codex.CallFailed, match="not found"):
         call(PATH=str(repo.tools))
+
+
+def test_codex_that_cant_be_started_is_failed(repo, call):
+    broken = repo.tmp / "broken-bin"
+    broken.mkdir()
+    (broken / "codex").write_text("#!/nonexistent/interpreter\n")
+    (broken / "codex").chmod(0o755)
+    with pytest.raises(codex.CallFailed, match="couldn't be started"):
+        call(PATH=f"{broken}:{repo.tools}")

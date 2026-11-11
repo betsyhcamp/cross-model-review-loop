@@ -22,6 +22,19 @@ POLL_SECONDS = 0.2  # for our own child, which wait() checks cheaply
 OTHER_POLL_SECONDS = 1.0  # for another runner's child, which needs ps
 
 
+class CallFailed(Exception):
+    """A reviewer call that provably didn't run its turn, such as a missing
+    binary or a startup error, or whose result was rejected. A plain retry
+    is safe. Exits 3; the message is user-facing."""
+
+
+class CallUncertain(Exception):
+    """A reviewer call that may have run its turn: a timeout, a stop
+    signal, a killed process, or a missing or unreadable result. It isn't
+    resent without an explicit retry. Exits 4; the message is user-facing.
+    """
+
+
 class Stopped(Exception):
     """The runner received a stop signal while a reviewer was running."""
 

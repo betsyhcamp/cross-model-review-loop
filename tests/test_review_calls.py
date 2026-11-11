@@ -302,26 +302,46 @@ def test_codex_failure_is_recorded_and_a_retry_is_marked(review):
     assert (review.path / "runs/02-step-2-codex-review-attempt-2").is_dir()
 
 
+def test_an_unreadable_result_is_recorded_as_uncertain_and_exits_4(review):
+    result = review.start("incomplete")
+    assert result.returncode == 4, result.stderr
+    assert "Codex call is uncertain" in result.stderr
+    assert "an (UNCERTAIN) section for run 01" in result.stderr
+    text = review.transcript()
+    assert "## Step 2 — Codex review (UNCERTAIN)" in text
+    assert "(FAILED)" not in text
+    assert review.session() is None
+
+
+def test_a_refused_second_writer_is_recorded_as_failed(review):
+    review.start()
+    body = review.message("rebuttal.md", "Rebuttal\n")
+    result = review.continue_(body, case="active_writer")
+    assert result.returncode == 3, result.stderr
+    assert "another Codex process" in result.stderr
+    assert f"## {STEP4} (FAILED)" in review.transcript()
+
+
 @pytest.mark.parametrize(
     "sig",
     [signal.SIGTERM, signal.SIGHUP, signal.SIGINT],
     ids=lambda sig: sig.name,
 )
-def test_a_stop_signal_kills_codex_and_is_recorded(
+def test_a_stop_signal_kills_codex_and_is_recorded_as_uncertain(
     repo, review, process_gone, sig
 ):
     pids = repo.tmp / "pids"
     runner = review.start_in_background(pids)
     runner.send_signal(sig)
     _, stderr = runner.communicate(timeout=10)
-    assert runner.returncode == 3, stderr
+    assert runner.returncode == 4, stderr
     assert f"stopped ({sig.name})" in stderr
     for pid in map(int, pids.read_text().split()):
         assert process_gone(pid), f"{pid} survived"
     assert re.search(
-        r"Step 2 — Codex review \(FAILED\)\n_[^\n]+_\n\n"
-        rf"Codex call failed: The runner was stopped "
-        rf"\({sig.name}\)",
+        r"Step 2 — Codex review \(UNCERTAIN\)\n_[^\n]+_\n\n"
+        rf"Codex call is uncertain: The runner was stopped "
+        rf"\({sig.name}\) and Codex was killed",
         review.transcript(),
     )
     assert review.session() is None
@@ -338,8 +358,8 @@ def test_a_stop_that_also_kills_codex_is_recorded(repo, review):
     runner.send_signal(signal.SIGTERM)
     _, stderr = runner.communicate(timeout=10)
     assert "Traceback" not in stderr
-    assert runner.returncode == 3, stderr
-    assert "## Step 2 — Codex review (FAILED)" in review.transcript()
+    assert runner.returncode == 4, stderr
+    assert "## Step 2 — Codex review (UNCERTAIN)" in review.transcript()
 
 
 def test_append_records_claudes_section_word_for_word(review):

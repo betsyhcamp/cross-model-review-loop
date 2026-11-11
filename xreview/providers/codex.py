@@ -21,24 +21,21 @@ PROGRESS_SECONDS = 30
 OnStart = Callable[[int, "str | None"], None] | None
 
 
-class ReviewerError(Exception):
-    """A failed reviewer call.
-
-    The message is user-facing; diagnostics stay in the run folder.
-    """
+# Calls fail with procs.CallFailed when Codex provably didn't run the turn,
+# and with procs.CallUncertain when it may have. When unsure, uncertain.
+CallFailed = procs.CallFailed
+CallUncertain = procs.CallUncertain
 
 
 def version() -> str:
     """Return `codex --version` output, such as "codex-cli 0.160.1"."""
     if shutil.which("codex") is None:
-        raise ReviewerError("Codex CLI not found on PATH.")
+        raise CallFailed("Codex CLI not found on PATH.")
     result = subprocess.run(
         ["codex", "--version"], capture_output=True, text=True
     )
     if result.returncode != 0:
-        raise ReviewerError(
-            f"`codex --version` failed: {result.stderr.strip()}"
-        )
+        raise CallFailed(f"`codex --version` failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
@@ -92,9 +89,10 @@ def run(
     """Run Codex in its own process group, prompt on stdin, output to files.
 
     On a timeout or a stop signal, the whole group is killed (procs.run).
+    A nonzero exit counts as failed only when Codex never started the turn.
     """
     if shutil.which("codex") is None:
-        raise ReviewerError("Codex CLI not found on PATH.")
+        raise CallFailed("Codex CLI not found on PATH.")
     try:
         code = procs.run(
             argv,
@@ -106,21 +104,39 @@ def run(
             progress=lambda elapsed: report_progress(run_dir, elapsed),
             on_start=on_start,
         )
+    except OSError as exc:
+        raise CallFailed(f"Codex couldn't be started: {exc}") from exc
     except procs.Stopped as exc:
-        raise ReviewerError(
-            f"The runner was stopped ({exc}); Codex was killed."
+        raise CallUncertain(
+            f"The runner was stopped ({exc}) and Codex was killed. It may "
+            "have finished its turn first."
         ) from exc
     except procs.TimedOut as exc:
-        raise ReviewerError(
+        raise CallUncertain(
             f"Codex timed out after {TIMEOUT_SECONDS // 60} minutes and was "
-            "killed."
+            "killed. It may have finished its turn first."
         ) from exc
     if code != 0:
         stderr = (run_dir / "stderr.txt").read_text(errors="replace")
         tail = "\n".join(stderr.splitlines()[-20:])
-        raise ReviewerError(
+        message = (
             f"Codex exited with code {code}. Last lines of stderr:\n{tail}"
         )
+        if "already has an active writer" in stderr:
+            raise CallFailed(
+                "Codex refused the call: another Codex process is still "
+                f"working in this thread.\n{message}"
+            )
+        if not turn_started(run_dir):
+            raise CallFailed(message)
+        raise CallUncertain(
+            f"{message}\nCodex had started the turn, so it may have run."
+        )
+
+
+def turn_started(run_dir: Path) -> bool:
+    events = (run_dir / "events.jsonl").read_text(errors="replace")
+    return '"turn.started"' in events
 
 
 def report_progress(run_dir: Path, elapsed: float) -> None:
@@ -145,6 +161,8 @@ def parse(
 ) -> tuple[str, str]:
     """Check the event stream and return (session_id, reply).
 
+    A turn Codex reports as failed raises CallFailed. A missing, malformed
+    or empty result raises CallUncertain, because the turn may have run.
     A top-level "error" event isn't fatal when the turn completed: Codex
     emits one for a stream error it retries by itself (spec §8.3).
     """
@@ -156,38 +174,38 @@ def parse(
         try:
             event = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ReviewerError(
+            raise CallUncertain(
                 "Codex printed a line that isn't JSON; see events.jsonl."
             ) from exc
         if not isinstance(event, dict):
-            raise ReviewerError("Codex printed an event that isn't an object.")
+            raise CallUncertain("Codex printed an event that isn't an object.")
         events.append(event)
     for event in events:
         if event.get("type") == "turn.failed":
             error = event.get("error")
             detail = error.get("message") if isinstance(error, dict) else None
-            raise ReviewerError(f"Codex reported a failed turn: {detail}.")
+            raise CallFailed(f"Codex reported a failed turn: {detail}.")
     started = [
         e.get("thread_id") for e in events if e.get("type") == "thread.started"
     ]
     completed = [e for e in events if e.get("type") == "turn.completed"]
     if len(started) != 1 or len(completed) != 1:
-        raise ReviewerError(
+        raise CallUncertain(
             f"Codex sent {len(started)} thread.started and {len(completed)} "
             "turn.completed events; expected exactly one of each."
         )
     try:
         session = str(uuid.UUID(started[0]))
     except (ValueError, TypeError, AttributeError) as exc:
-        raise ReviewerError(
+        raise CallUncertain(
             "Codex did not return a valid session UUID."
         ) from exc
     if expected_session and session != expected_session:
-        raise ReviewerError(
+        raise CallUncertain(
             "Codex resumed a different session; refusing its result."
         )
     response = run_dir / "response.md"
     reply = response.read_text(encoding="utf-8") if response.exists() else ""
     if not reply.strip():
-        raise ReviewerError("Codex returned an empty response.")
+        raise CallUncertain("Codex returned an empty response.")
     return session, reply
