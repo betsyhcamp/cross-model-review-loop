@@ -13,6 +13,7 @@ uncertain. A step that may have run is resent only with --retry-uncertain.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,7 @@ import sys
 import time
 import uuid
 
-from . import cli, decisions, procs, transcript
+from . import cli, decisions, procs, transcript, wake
 from .providers import claude, codex
 
 STATE = "run-state.json"
@@ -1216,10 +1217,22 @@ class Runner:
         print(f"The review is at a stop, {what}. Report: {report}")
 
 
+@contextlib.contextmanager
+def awake(runner: Runner):
+    """Hold sleep off while the command runs, then for a while at the stop
+    it leaves the review at, however it ends."""
+    runner.st = runner.load()
+    wake.while_running()
+    try:
+        yield
+    finally:
+        runner.st["wake"] = wake.at_stop(runner.st.get("wake"))
+        runner.save()
+
+
 def run(name: str, retry: bool, alone: bool = False) -> None:
     runner = Runner(name, retry, alone)
-    with Lock(runner.review):
-        runner.st = runner.load()
+    with Lock(runner.review), awake(runner):
         runner.run()
 
 
@@ -1231,6 +1244,5 @@ def at_stop(
     numbers: list[int] | None = None,
 ) -> None:
     runner = Runner(name, retry)
-    with Lock(runner.review):
-        runner.st = runner.load()
+    with Lock(runner.review), awake(runner):
         runner.at_stop(kind, given, numbers)
