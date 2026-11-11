@@ -17,7 +17,7 @@ import sys
 import time
 
 from . import transcript
-from .providers import codex
+from .providers import claude, codex
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 REVIEWS = Path(".reviews")
@@ -108,6 +108,9 @@ def prepare(base: str, name: str | None) -> None:
             f"{exc} Install with `brew install --cask codex`, "
             "then `codex login`."
         ) from exc
+    claude_path, found_by = claude.locate()
+    if not claude_path:
+        raise CheckFailed(claude.SETUP)
     enter_repo()
     resolved = git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
     if resolved.returncode != 0:
@@ -134,6 +137,12 @@ def prepare(base: str, name: str | None) -> None:
     head_commit = (head_sha, subject(head_sha))
     transcript.create(review, name, reviewer, base_commit, head_commit)
     print_summary(name, review, base_commit, head_commit)
+    if found_by == "fallback":
+        print(
+            "\n**Note:** `claude` isn't on your PATH, so the review's Claude "
+            f"session will use this session's Claude Code, `{claude_path}`. "
+            "To use your own install instead, put `claude` on your PATH."
+        )
 
 
 def default_name() -> str:

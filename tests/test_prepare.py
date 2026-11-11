@@ -100,6 +100,39 @@ def test_codex_missing_or_broken_is_refused(repo, case, reason):
     assert "brew install --cask codex" in result.stderr
 
 
+def without_claude(repo) -> str:
+    """The test PATH with the claude shim taken out."""
+    folders = repo.env["PATH"].split(":")
+    return ":".join(f for f in folders if f != str(repo.claude_bin))
+
+
+def test_claude_missing_is_refused_with_setup_instructions(repo):
+    result = repo.xreview("prepare", repo.base, PATH=without_claude(repo))
+    assert result.returncode == 1
+    assert "Claude Code CLI not found" in result.stderr
+    assert "doesn't put `claude` on your PATH" in result.stderr
+    assert not (repo.path / ".reviews").exists()
+
+
+def test_claude_found_only_through_the_session_is_used_with_a_note(repo):
+    shim = str(repo.claude_bin / "claude")
+    result = repo.xreview(
+        "prepare",
+        repo.base,
+        PATH=without_claude(repo),
+        CLAUDE_CODE_EXECPATH=shim,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"use this session's Claude Code, `{shim}`" in result.stdout
+    assert "put `claude` on your PATH" in result.stdout
+
+
+def test_claude_on_path_needs_no_note(repo):
+    result = repo.xreview("prepare", repo.base)
+    assert result.returncode == 0, result.stderr
+    assert "isn't on your PATH" not in result.stdout
+
+
 def test_outside_a_git_repo_is_refused(repo):
     result = repo.xreview("prepare", repo.base, cwd=repo.tmp)
     assert result.returncode == 1
