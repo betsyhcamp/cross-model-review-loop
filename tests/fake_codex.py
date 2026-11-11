@@ -17,8 +17,10 @@ and FAKE_CODEX_SLEEPS to seconds to wait before responding, so a test can
 kill the runner while Codex works.
 
 FAKE_CODEX_LOG, if set, gets one JSON line per call with the argv, stdin and
-working folder. FAKE_CODEX_PIDS, if set, gets the pids of this process and
-of a child it starts (timeout case), so tests can check both were killed.
+working folder. With CODEX_HOME set, each response is also kept in
+CODEX_HOME/sessions/rollout.jsonl, as real Codex keeps its sessions there.
+FAKE_CODEX_PIDS, if set, gets the pids of this process and of a child it
+starts (timeout case), so tests can check both were killed.
 Events follow the shape of real codex-cli 0.160.1 output.
 """
 
@@ -41,10 +43,10 @@ def for_call(variable, default):
     folder = ""
     if "-o" in sys.argv:
         folder = Path(sys.argv[sys.argv.index("-o") + 1]).parent.name
-    for part, value in choices.items():
-        if part in folder:
-            return value
-    return default
+    # The longest part that matches wins, so "fix-up-decision" beats
+    # "decision" for a folder named claude-fix-up-decision-copy.
+    matches = [part for part in choices if part in folder]
+    return choices[max(matches, key=len)] if matches else default
 
 
 case = for_call("FAKE_CODEX_CASES", os.environ.get("FAKE_CODEX_CASE", "ok"))
@@ -114,6 +116,11 @@ time.sleep(float(for_call("FAKE_CODEX_SLEEPS", 0)))
 output = Path(sys.argv[sys.argv.index("-o") + 1])
 response = for_call("FAKE_CODEX_ANSWERS", RESPONSE)
 output.write_text("" if case == "empty" else response)
+if os.environ.get("CODEX_HOME"):
+    sessions = Path(os.environ["CODEX_HOME"]) / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    with (sessions / "rollout.jsonl").open("a") as rollout:
+        rollout.write(json.dumps({"response": response}) + "\n")
 
 if case == "nonjson":
     print("Reading prompt from stdin...")

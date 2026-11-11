@@ -15,6 +15,15 @@ objects mapping part of the run folder's name (its settings file is in the
 folder) to a case or an answer, and FAKE_CLAUDE_SLEEPS to seconds to wait
 before answering, so a test can kill the runner while Claude works.
 
+An answer of "@headings" echoes every `### Decision <n>: <title>` line in
+the prompt, each with a body, as a merge or a fixed reply would;
+"@headings-but-last" leaves the last one out.
+
+FAKE_LEAK_MARK and FAKE_LEAK_ROOTS (a JSON list of folders) make each call
+log "leaks": every file under those folders that holds the mark and that
+the call's sandbox doesn't block from reading, and whether the prompt
+holds it.
+
 FAKE_CLAUDE_LOG, if set, gets one JSON line per call with the
 argv, the settings file's contents, the prompt, the working folder and the
 environment variables the tests look at. FAKE_CLAUDE_PIDS, if set, gets
@@ -24,6 +33,7 @@ this process's ID. Events follow the shape of Claude Code 2.1.319 output.
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 import uuid
@@ -53,10 +63,10 @@ def for_step(variable, default):
     folder's name."""
     choices = json.loads(os.environ.get(variable) or "{}")
     folder = Path(settings_file).parent.name if settings_file else ""
-    for part, value in choices.items():
-        if part in folder:
-            return value
-    return default
+    # The longest part that matches wins, so "fix-up-decision" beats
+    # "decision" for a folder named claude-fix-up-decision-copy.
+    matches = [part for part in choices if part in folder]
+    return choices[max(matches, key=len)] if matches else default
 
 
 session = flag("--session-id") or flag("--resume") or str(uuid.uuid4())
@@ -65,6 +75,33 @@ case = for_step("FAKE_CLAUDE_CASES", os.environ.get("FAKE_CLAUDE_CASE", "ok"))
 settings = (
     json.loads(Path(settings_file).read_text()) if settings_file else None
 )
+
+
+def leaks():
+    """Files under FAKE_LEAK_ROOTS holding FAKE_LEAK_MARK that this call's
+    sandbox doesn't block."""
+    mark = os.environ.get("FAKE_LEAK_MARK")
+    if not mark:
+        return None
+    denied = [
+        Path(p)
+        for p in (settings or {})
+        .get("sandbox", {})
+        .get("filesystem", {})
+        .get("denyRead", [])
+    ]
+    found = []
+    for root in json.loads(os.environ.get("FAKE_LEAK_ROOTS") or "[]"):
+        for path in Path(root).rglob("*"):
+            if not path.is_file():
+                continue
+            if any(path == d or d in path.parents for d in denied):
+                continue
+            if mark in path.read_text(errors="replace"):
+                found.append(str(path))
+    return {"readable": sorted(found), "in_prompt": mark in prompt}
+
+
 if os.environ.get("FAKE_CLAUDE_LOG"):
     call = {
         "argv": argv,
@@ -74,6 +111,7 @@ if os.environ.get("FAKE_CLAUDE_LOG"):
         "env": {k: os.environ.get(k) for k in WATCHED},
         "session": session,
         "new": "--session-id" in argv,
+        "leaks": leaks(),
     }
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
         log.write(json.dumps(call) + "\n")
@@ -168,6 +206,19 @@ answer = for_step(
     "FAKE_CLAUDE_ANSWERS",
     os.environ.get("FAKE_CLAUDE_TEXT", "FAKE-CLAUDE-ANSWER"),
 )
+if answer.startswith("@headings"):
+    lines = list(
+        dict.fromkeys(re.findall(r"^### Decision \d+: .*$", prompt, re.M))
+    )
+    if answer == "@headings-but-last":
+        lines = lines[:-1]
+    sections = [
+        f"{line}\nFAKE-MERGED-{line.split()[2].rstrip(':')}" for line in lines
+    ]
+    answer = "\n\n".join(
+        ["## Part 4 — Options for the open decisions (Claude and Codex)"]
+        + sections
+    )
 if MARK in prompt:
     if case == "sandbox_broken":
         tool_round(

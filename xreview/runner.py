@@ -20,7 +20,7 @@ import sys
 import time
 import uuid
 
-from . import cli, procs, transcript
+from . import cli, decisions, procs, transcript
 from .providers import claude, codex
 
 STATE = "run-state.json"
@@ -32,6 +32,8 @@ REBUTTAL = "Step 3 — Claude rebuttal"
 REBUTTAL_SENT = "Step 3 — Claude rebuttal — sent to Codex"
 CODEX_RESPONSE = "Step 4 — Codex response"
 PLAN = "Step 5 — Claude final plan"
+DECISION_COPY = "Decision copy"
+RANKED_BY_BOTH = "the ranking you wrote before seeing the reviewer's"
 
 
 def crash(point: str) -> None:
@@ -124,14 +126,20 @@ class Runner:
             "steps": {},
             "op": None,
             "stopped": False,
+            "decisions": {},
         }
 
     def save(self) -> None:
         write_atomic(self.review / STATE, json.dumps(self.st, indent=2) + "\n")
 
-    def template(self, name: str) -> str:
+    def template(self, name: str, **fields: str) -> str:
+        """A template with {base} and {head} filled, plus {name} and any
+        fields given. Only templates are filled, never a reviewer's text
+        or the developer's words."""
         text = cli.fill(cli.read_template(name), self.state)
-        return text.replace("{name}", self.name).rstrip("\n")
+        for key, value in {"name": self.name, **fields}.items():
+            text = text.replace("{" + key + "}", value)
+        return text.rstrip("\n")
 
     def resent(self, prompt: str) -> str:
         return join(self.template("runner/resend-note"), prompt)
@@ -488,13 +496,193 @@ class Runner:
             "messages/05-plan.md",
             heading=PLAN,
         )
+        copy = self.claude_step(
+            "run:decision-copy",
+            "decision copy",
+            DECISION_COPY,
+            self.template("runner/decision-copy"),
+            "messages/06-decisions-r1.md",
+        )
+        if not decisions.is_none(copy):
+            if not self.st["decisions"]:
+                copy, source = self.checked(
+                    "run:decision-copy",
+                    copy,
+                    decisions.renumbered(copy, 1),
+                    "fix-up decision copy",
+                    DECISION_COPY,
+                )
+                self.register(copy, source)
+            self.ranking_round(1, sorted(self.numbers()))
         self.stop()
+
+    # --- the open decisions --------------------------------------------------
+
+    def numbers(self) -> list[int]:
+        return [int(n) for n in self.st["decisions"]]
+
+    def register(self, text: str, source: str) -> None:
+        """Give each decision in text its permanent number and title, with
+        source as the file holding its description."""
+        for n, title in decisions.headings(text):
+            self.st["decisions"].setdefault(
+                str(n), {"title": title, "description": source}
+            )
+        self.save()
+
+    def titled(self, numbers: list[int]) -> list[tuple[int, str]]:
+        return [(n, self.st["decisions"][str(n)]["title"]) for n in numbers]
+
+    def descriptions(self, numbers: list[int]) -> str:
+        """The description of each decision, as its heading and section."""
+        parts = []
+        for n in numbers:
+            entry = self.st["decisions"][str(n)]
+            text = self.path(entry["description"]).read_text(encoding="utf-8")
+            parts.append(decisions.sections(text)[n])
+        return "\n\n".join(parts)
+
+    def checked(
+        self,
+        key: str,
+        text: str,
+        expected: list[tuple[int, str]],
+        tag: str,
+        label: str,
+    ) -> tuple[str, str]:
+        """(text, the file holding it), or Claude's fixed reply and its
+        file if text doesn't have exactly one heading per expected
+        decision. If the fixed reply doesn't either, it's recorded and the
+        step stops, ready to be asked again."""
+        numbers = [n for n, _ in expected]
+        out = self.st["steps"][key]["out"]
+        found = decisions.problems(text, numbers)
+        if not found:
+            return text, out
+        fix_key = f"{key}:fix-up"
+        out = out.replace(".md", "-fixed.md")
+        fixed = self.claude_step(
+            fix_key,
+            tag,
+            f"{label} — headings fixed",
+            self.template(
+                "runner/fix-up",
+                headings=decisions.heading_lines(expected)
+                or "`### Decision 1: <title>`, `### Decision 2: <title>` "
+                "and so on, one for each decision",
+                problems=" ".join(found),
+            ),
+            out,
+        )
+        still = decisions.problems(fixed, numbers)
+        if not still:
+            return fixed, out
+        transcript.append(
+            self.review,
+            f"{label} (headings incomplete)",
+            fixed,
+            transcript.now(),
+        )
+        del self.st["steps"][key], self.st["steps"][fix_key]
+        self.save()
+        raise cli.CheckFailed(
+            f"{label}: Claude's reply still doesn't have one `### Decision` "
+            f"heading for each decision ({' '.join(still)}), after one "
+            "request to fix it. Its reply is in the transcript. Run the same "
+            "command again to ask Claude for this step again; the reviewer "
+            "isn't asked again."
+        )
+
+    def ranking_round(
+        self, n: int, numbers: list[int], words: str | None = None
+    ) -> None:
+        """A blind ranking: Codex ranks first, so Claude's ranking doesn't
+        exist yet. Claude then ranks with every copy of Codex's ranking
+        blocked, and merges the two with Codex's ranking in the prompt."""
+        body = self.descriptions(numbers)
+        if words is not None:
+            body = join(body, f"My question:\n\n{words}")
+        ranking = self.codex_step(
+            f"round-{n}:codex",
+            cli.compose(
+                ["shared/decision-ranking", "shared/reviewer-guard"],
+                self.state,
+                body,
+            ),
+            f"Decision round {n} — sent to Codex",
+            f"Decision round {n} — Codex ranking",
+        )
+        heading = f"Decision round {n} — Claude ranking"
+        self.claude_step(
+            f"round-{n}:claude-ranking",
+            f"ranking r{n}",
+            heading,
+            join(
+                self.template("shared/decision-ranking"),
+                self.template("runner/ranking-blind"),
+                body,
+            ),
+            f"messages/06-claude-ranking-r{n}.md",
+            heading=heading,
+            blocked=self.codex_copies(),
+        )
+        self.merge(n, numbers, ranking, RANKED_BY_BOTH)
+
+    def codex_copies(self) -> list[Path]:
+        """Everywhere a copy of Codex's ranking is kept: the review's run
+        folders, its transcript, and Codex's own home folder."""
+        home = os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+        return [
+            (self.review / "runs").resolve(),
+            (self.review / transcript.TRANSCRIPT).resolve(),
+            Path(home).resolve(),
+        ]
+
+    def merge(
+        self, n: int, numbers: list[int], reviewer: str, view: str
+    ) -> None:
+        """Claude merges the reviewer's view with its own into each
+        decision's latest options, which the report then shows."""
+        key = f"round-{n}:merge"
+        label = f"Decision round {n} — Claude merged options"
+        expected = self.titled(numbers)
+        text = self.claude_step(
+            key,
+            f"merge r{n}",
+            label,
+            join(
+                self.template("shared/decision-merge-claude"),
+                reviewer,
+                self.template(
+                    "runner/merge-closing",
+                    view=view,
+                    headings=decisions.heading_lines(expected),
+                ),
+            ),
+            f"messages/06-merge-r{n}.md",
+        )
+        text, source = self.checked(key, text, expected, f"fix-up r{n}", label)
+        transcript.append_once(self.review, label, text, transcript.now())
+        for number in numbers:
+            self.st["decisions"][str(number)]["latest"] = {
+                "file": source,
+                "label": f"From decision round {n}",
+            }
+        self.save()
+
+    # --- stops ---------------------------------------------------------------
 
     def stop(self) -> None:
         plan = self.path("messages/05-plan.md").read_text(encoding="utf-8")
+        latest = []
+        for n in sorted(self.numbers()):
+            entry = self.st["decisions"][str(n)].get("latest")
+            if entry:
+                text = self.path(entry["file"]).read_text(encoding="utf-8")
+                latest.append((entry["label"], decisions.sections(text)[n]))
         write_atomic(
             self.review / "report.md",
-            f"# Review report — {self.name}\n\n{plan.rstrip()}\n",
+            decisions.report(self.name, plan, latest),
         )
         self.st["stopped"] = True
         self.st["op"] = None
@@ -503,7 +691,13 @@ class Runner:
 
     def report_stop(self) -> None:
         report = Path.cwd() / self.review / "report.md"
-        print(f"The review is at a stop. Report: {report}")
+        count = len(self.st["decisions"])
+        if count:
+            plural = "decision" if count == 1 else "decisions"
+            what = f"with {count} open {plural}"
+        else:
+            what = "with no open decisions"
+        print(f"The review is at a stop, {what}. Report: {report}")
 
 
 def run(name: str, retry: bool) -> None:
