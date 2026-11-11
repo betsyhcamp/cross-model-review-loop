@@ -184,9 +184,9 @@ def identity(pid: int) -> str | None:
     return ps("-o", "lstart=", "-p", str(pid)).strip() or None
 
 
-def alive(pid: int, started: str | None) -> bool:
+def alive(pid: int | None, started: str | None) -> bool:
     """Whether the process recorded as (pid, started) is still running."""
-    return started is not None and identity(pid) == started
+    return bool(pid and started) and identity(pid) == started
 
 
 def find(text: str) -> tuple[int, str] | None:

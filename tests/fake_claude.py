@@ -10,7 +10,12 @@ a second's wait).
 
 The answer is FAKE_CLAUDE_TEXT if set, else "FAKE-CLAUDE-ANSWER". A
 preflight prompt (it names the sandbox mark) gets a Bash call that prints
-the mark. FAKE_CLAUDE_LOG, if set, gets one JSON line per call with the
+the mark. Per step, FAKE_CLAUDE_CASES and FAKE_CLAUDE_ANSWERS are JSON
+objects mapping part of the run folder's name (its settings file is in the
+folder) to a case or an answer, and FAKE_CLAUDE_SLEEPS to seconds to wait
+before answering, so a test can kill the runner while Claude works.
+
+FAKE_CLAUDE_LOG, if set, gets one JSON line per call with the
 argv, the settings file's contents, the prompt, the working folder and the
 environment variables the tests look at. FAKE_CLAUDE_PIDS, if set, gets
 this process's ID. Events follow the shape of Claude Code 2.1.319 output.
@@ -35,7 +40,6 @@ WATCHED = (
     "CLAUDE_CODE_USE_BEDROCK",
 )
 
-case = os.environ.get("FAKE_CLAUDE_CASE", "ok")
 argv = sys.argv[1:]
 prompt = sys.stdin.read()
 
@@ -44,8 +48,20 @@ def flag(name):
     return argv[argv.index(name) + 1] if name in argv else None
 
 
+def for_step(variable, default):
+    """The value for this step from a JSON object keyed by part of the run
+    folder's name."""
+    choices = json.loads(os.environ.get(variable) or "{}")
+    folder = Path(settings_file).parent.name if settings_file else ""
+    for part, value in choices.items():
+        if part in folder:
+            return value
+    return default
+
+
 session = flag("--session-id") or flag("--resume") or str(uuid.uuid4())
 settings_file = flag("--settings")
+case = for_step("FAKE_CLAUDE_CASES", os.environ.get("FAKE_CLAUDE_CASE", "ok"))
 settings = (
     json.loads(Path(settings_file).read_text()) if settings_file else None
 )
@@ -147,7 +163,11 @@ if case == "timeout":
 if case == "edit_tracked":
     Path("a.txt").write_text("changed by Claude\n")
 
-answer = os.environ.get("FAKE_CLAUDE_TEXT", "FAKE-CLAUDE-ANSWER")
+time.sleep(float(for_step("FAKE_CLAUDE_SLEEPS", 0)))
+answer = for_step(
+    "FAKE_CLAUDE_ANSWERS",
+    os.environ.get("FAKE_CLAUDE_TEXT", "FAKE-CLAUDE-ANSWER"),
+)
 if MARK in prompt:
     if case == "sandbox_broken":
         tool_round(

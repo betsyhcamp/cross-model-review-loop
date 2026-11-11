@@ -88,6 +88,8 @@ def shared(tmp_path_factory: pytest.TempPathFactory) -> Shared:
         **os.environ,
         "PATH": f"{codex_dir}:{claude_dir}:{tools}",
         "HOME": str(root),
+        "CLAUDE_CONFIG_DIR": str(root / "claude-config"),
+        "CLAUDE_CODE_TMPDIR": str(root / "claude-tmp"),
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_AUTHOR_NAME": "Test",

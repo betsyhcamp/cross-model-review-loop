@@ -66,7 +66,7 @@ CallUncertain = procs.CallUncertain
 OnStart = Callable[[int, "str | None"], None] | None
 
 
-# --- finding claude ---------------------------------------------------------
+# --- finding claude ----------------------------------------------------------
 
 
 def locate() -> tuple[str | None, str]:
@@ -90,7 +90,7 @@ def binary() -> str:
     return found
 
 
-# --- the boundary -----------------------------------------------------------
+# --- the boundary ------------------------------------------------------------
 
 
 def slug(path: Path) -> str:
@@ -215,7 +215,7 @@ def environment() -> dict[str, str]:
     return env
 
 
-# --- one turn ---------------------------------------------------------------
+# --- one turn ----------------------------------------------------------------
 
 
 def turn(
@@ -328,7 +328,7 @@ def preflight(repo: Path, run_dir: Path) -> None:
         )
 
 
-# --- reading a turn's output ------------------------------------------------
+# --- reading a turn's output -------------------------------------------------
 
 
 def read_events(run_dir: Path) -> list[dict]:
@@ -398,7 +398,8 @@ def tool_results(events: list[dict]) -> list[dict]:
 
 
 def startup_failure(run_dir: Path) -> str:
-    stderr = (run_dir / "stderr.txt").read_text(errors="replace")
+    path = run_dir / "stderr.txt"
+    stderr = path.read_text(errors="replace") if path.exists() else ""
     tail = "\n".join(stderr.splitlines()[-20:]) or "(no output)"
     return (
         "Claude Code exited before starting the turn. Last lines of "

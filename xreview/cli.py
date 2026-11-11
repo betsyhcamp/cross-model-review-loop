@@ -1,4 +1,5 @@
-"""xreview command line: prepare, check, start, continue, prompt, append.
+"""xreview command line: prepare, check, run, start, continue, prompt,
+append.
 
 Exit codes: 0 success, 1 failed precondition or check, 2 usage error
 (argparse's own code), 3 the reviewer call failed or its response was
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from . import transcript
+from . import runner, transcript
 from .providers import claude, codex
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
@@ -375,32 +376,7 @@ def call_reviewer(
         error = exc
     changed = tree_changes(state)
     if error or changed:
-        uncertain = isinstance(error, codex.CallUncertain)
-        if uncertain:
-            summary = f"{codex.DISPLAY_NAME} call is uncertain: {error}"
-        elif error:
-            summary = f"{codex.DISPLAY_NAME} call failed: {error}"
-        else:
-            summary = (
-                "The response was rejected: the tree changed during the call."
-            )
-        restore = ["Restore the tree before any retry."] if changed else []
-        details = "\n\n".join(
-            [summary, *changed, *restore, f"Diagnostics: `{run_dir}/`"]
-        )
-        label = "UNCERTAIN" if uncertain else "FAILED"
-        transcript.append(
-            review,
-            f"{received} ({label})",
-            details,
-            f"{transcript.now()} · run {run}",
-        )
-        kind = codex.CallUncertain if uncertain else codex.CallFailed
-        article = "an" if uncertain else "a"
-        raise kind(
-            f"{details}\nThe transcript has {article} ({label}) section for "
-            f"run {run}."
-        )
+        raise record_failure(review, received, run_dir, error, changed)
 
     if state["reviewer_session_id"] is None:
         state["reviewer_session_id"] = session
@@ -411,6 +387,47 @@ def call_reviewer(
     )
     print(f"{received}: done in {took} (run {run}).")
     print(f"Response: {Path.cwd() / run_dir / 'response.md'}")
+
+
+def record_failure(
+    review: Path,
+    received: str,
+    run_dir: Path,
+    error: Exception | None,
+    changed: list[str],
+    who: str = codex.DISPLAY_NAME,
+) -> Exception:
+    """Append the (FAILED) or (UNCERTAIN) section for a reviewer call that
+    raised error, or whose response was rejected because the tree changed,
+    and return the exception to raise: CallUncertain if the call may have
+    run, otherwise CallFailed."""
+    uncertain = isinstance(error, codex.CallUncertain)
+    if uncertain:
+        summary = f"{who} call is uncertain: {error}"
+    elif error:
+        summary = f"{who} call failed: {error}"
+    else:
+        summary = (
+            "The response was rejected: the tree changed during the call."
+        )
+    restore = ["Restore the tree before any retry."] if changed else []
+    details = "\n\n".join(
+        [summary, *changed, *restore, f"Diagnostics: `{run_dir}/`"]
+    )
+    label = "UNCERTAIN" if uncertain else "FAILED"
+    run = run_dir.name[:2]
+    transcript.append(
+        review,
+        f"{received} ({label})",
+        details,
+        f"{transcript.now()} · run {run}",
+    )
+    kind = codex.CallUncertain if uncertain else codex.CallFailed
+    article = "an" if uncertain else "a"
+    return kind(
+        f"{details}\nThe transcript has {article} ({label}) section for "
+        f"run {run}."
+    )
 
 
 def duration(seconds: float) -> str:
@@ -455,6 +472,17 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("check", help="run the tree check and the prompt check")
     p.add_argument("name")
     p.set_defaults(run=lambda a: check(a.name))
+
+    p = sub.add_parser(
+        "run", help="run the review, or pick it up where it stopped"
+    )
+    p.add_argument("name")
+    p.add_argument(
+        "--retry-uncertain",
+        action="store_true",
+        help="send again a call that may have run",
+    )
+    p.set_defaults(run=lambda a: runner.run(a.name, a.retry_uncertain))
 
     p = sub.add_parser("start", help="send the reviewer prompt to Codex")
     p.add_argument("name")

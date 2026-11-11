@@ -68,6 +68,20 @@ def append(review: Path, heading: str, body: str, meta: str) -> None:
         f.write(f"## {heading}\n_{meta}_\n\n{text}\n\n---\n\n")
 
 
+def append_once(review: Path, heading: str, body: str, meta: str) -> None:
+    """Append a section unless the transcript already ends with it, as it
+    does when a runner died after appending it but before saving that it
+    had. Runner commands take one at a time, so their own last section is
+    the only one that can be repeated."""
+    text = (review / TRANSCRIPT).read_text(encoding="utf-8")
+    tail = f"{body.rstrip(chr(10))}\n\n---\n\n"
+    if text.endswith(tail):
+        before = text[: -len(tail)]
+        if re.search(rf"## {re.escape(heading)}\n_[^\n]*_\n\n\Z", before):
+            return
+    append(review, heading, body, meta)
+
+
 def attempt(review: Path, heading: str) -> int:
     """1 the first time a message is sent under heading, 2 for a retry..."""
     lines = (review / TRANSCRIPT).read_text(encoding="utf-8").splitlines()

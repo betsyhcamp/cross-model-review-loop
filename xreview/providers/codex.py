@@ -167,7 +167,10 @@ def parse(
     emits one for a stream error it retries by itself (spec §8.3).
     """
     events = []
-    stream = (run_dir / "events.jsonl").read_text(errors="replace")
+    path = run_dir / "events.jsonl"
+    if not path.exists():
+        raise CallUncertain("Codex left no events; see the run folder.")
+    stream = path.read_text(errors="replace")
     for line in stream.splitlines():
         if not line.strip():
             continue

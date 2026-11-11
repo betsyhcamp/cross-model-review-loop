@@ -11,6 +11,11 @@ edit_then_exit (edits a tracked file, then fails) | commit | create_untracked
 (refuses a second writer, as codex-cli 0.160.1 does) | exit_after_start
 (starts the turn, then exits nonzero).
 
+Per call, FAKE_CODEX_CASES and FAKE_CODEX_ANSWERS are JSON objects mapping
+part of the run folder's name (from the -o path) to a case or a response,
+and FAKE_CODEX_SLEEPS to seconds to wait before responding, so a test can
+kill the runner while Codex works.
+
 FAKE_CODEX_LOG, if set, gets one JSON line per call with the argv, stdin and
 working folder. FAKE_CODEX_PIDS, if set, gets the pids of this process and
 of a child it starts (timeout case), so tests can check both were killed.
@@ -28,7 +33,21 @@ SESSION = "01a11457-66e5-73e3-8c89-991f3b54c198"
 OTHER_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 RESPONSE = "Finding 1: nothing real.\n\nFAKE-RESPONSE-BODY\n"
 
-case = os.environ.get("FAKE_CODEX_CASE", "ok")
+
+def for_call(variable, default):
+    """The value for this call from a JSON object keyed by part of the run
+    folder's name."""
+    choices = json.loads(os.environ.get(variable) or "{}")
+    folder = ""
+    if "-o" in sys.argv:
+        folder = Path(sys.argv[sys.argv.index("-o") + 1]).parent.name
+    for part, value in choices.items():
+        if part in folder:
+            return value
+    return default
+
+
+case = for_call("FAKE_CODEX_CASES", os.environ.get("FAKE_CODEX_CASE", "ok"))
 if "--version" in sys.argv:
     if case == "exit":
         print("codex: broken install", file=sys.stderr)
@@ -91,8 +110,10 @@ if case == "wrong_thread":
     session = OTHER_SESSION
 if case == "bad_uuid":
     session = "not-a-uuid"
+time.sleep(float(for_call("FAKE_CODEX_SLEEPS", 0)))
 output = Path(sys.argv[sys.argv.index("-o") + 1])
-output.write_text("" if case == "empty" else RESPONSE)
+response = for_call("FAKE_CODEX_ANSWERS", RESPONSE)
+output.write_text("" if case == "empty" else response)
 
 if case == "nonjson":
     print("Reading prompt from stdin...")
@@ -122,7 +143,7 @@ if case == "nonfatal_error":
 emit(
     {
         "type": "item.completed",
-        "item": {"id": "item_0", "type": "agent_message", "text": RESPONSE},
+        "item": {"id": "item_0", "type": "agent_message", "text": response},
     }
 )
 if case == "turn_failed":
