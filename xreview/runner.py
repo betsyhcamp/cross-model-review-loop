@@ -36,6 +36,8 @@ PLAN = "Step 5 — Claude final plan"
 DECISION_COPY = "Decision copy"
 RANKED_BY_BOTH = "the ranking you wrote before seeing the reviewer's"
 LATEST_PART_4 = "your latest Part 4 for these decisions"
+PLAN_PART_4 = "your Part 4 in the Step 5 plan"
+IN_PLAN = "Claude's own, in Part 4 of the plan above"
 # An answer this long or shorter is printed for Session A to show word for
 # word; a longer one is left in its file.
 ANSWER_LIMIT = 2000
@@ -61,12 +63,17 @@ def write_atomic(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+def and_list(numbers: list[int]) -> str:
+    """ "2", or "1, 2 and 4"."""
+    if len(numbers) == 1:
+        return str(numbers[0])
+    return ", ".join(str(n) for n in numbers[:-1]) + f" and {numbers[-1]}"
+
+
 def listing(numbers: list[int]) -> str:
     """ "decision 2", or "decisions 1, 2 and 4"."""
-    if len(numbers) == 1:
-        return f"decision {numbers[0]}"
-    head = ", ".join(str(n) for n in numbers[:-1])
-    return f"decisions {head} and {numbers[-1]}"
+    plural = "decisions" if len(numbers) > 1 else "decision"
+    return f"{plural} {and_list(numbers)}"
 
 
 def groups(plan: str) -> int:
@@ -138,11 +145,12 @@ class Lock:
 class Runner:
     """One xreview command on one review, holding its run state."""
 
-    def __init__(self, name: str, retry: bool = False):
+    def __init__(self, name: str, retry: bool = False, alone: bool = False):
         cli.enter_repo()
         self.name = name
         self.review = cli.review_dir(name)
         self.retry = retry
+        self.alone = alone  # --no-decision-rounds
         self.state = transcript.read_state(self.review)
         self.st = self.load()
 
@@ -501,6 +509,11 @@ class Runner:
         if not self.st["op"]:
             self.st["op"] = {"kind": "run"}
             self.save()
+        plan_done = self.st["steps"].get("run:plan", {}).get("status") == DONE
+        if self.alone and not plan_done:
+            self.st["no_decision_rounds"] = True
+            self.save()
+        alone = self.st.get("no_decision_rounds", False)
         if not self.st["steps"].get("run:codex-review"):
             problems = cli.tree_problems(self.state) + cli.prompt_problems(
                 self.review, self.state
@@ -534,14 +547,21 @@ class Runner:
             REBUTTAL_SENT,
             CODEX_RESPONSE,
         )
-        self.claude_step(
+        parts = [self.template("code/step5-claude-plan"), response]
+        if alone:
+            parts.append(self.template("runner/plan-part4-alone"))
+        plan = self.claude_step(
             "run:plan",
             "plan",
             PLAN,
-            join(self.template("code/step5-claude-plan"), response),
+            join(*parts),
             "messages/05-plan.md",
             heading=PLAN,
         )
+        if alone:
+            self.plan_decisions(plan)
+            self.stop()
+            return
         copy = self.claude_step(
             "run:decision-copy",
             "decision copy",
@@ -574,6 +594,31 @@ class Runner:
             self.st["decisions"].setdefault(
                 str(n), {"title": title, "description": source}
             )
+        self.save()
+
+    def plan_decisions(self, plan: str) -> None:
+        """Under --no-decision-rounds, the decisions come from the plan's
+        own Part 4, which is also each one's latest options until Codex
+        ranks it."""
+        if self.st["decisions"] or not decisions.headings(plan):
+            return
+        text, source = self.checked(
+            "run:plan",
+            plan,
+            decisions.renumbered(plan, 1),
+            "fix-up plan",
+            PLAN,
+        )
+        if source != self.st["steps"]["run:plan"]["out"]:
+            transcript.append_once(
+                self.review, f"{PLAN} — headings fixed", text, transcript.now()
+            )
+            self.st["plan"] = source
+        for n, title in decisions.headings(text):
+            self.st["decisions"][str(n)] = {
+                "title": title,
+                "latest": {"file": source, "label": IN_PLAN, "in_plan": True},
+            }
         self.save()
 
     def titled(self, numbers: list[int]) -> list[tuple[int, str]]:
@@ -779,12 +824,28 @@ class Runner:
         op["words"] = f"messages/{kind}-{op['n']}-words.md"
         write_atomic(self.path(op["words"]), words)
         op["prefixes"] = [f"{kind}-{op['n']}:"]
-        if kind == "rank" or (kind == "ask-codex" and self.st["decisions"]):
+
+        def next_round(field: str) -> None:
             counters["round"] = max(counters.get("round", 1), 1) + 1
-            op["round"] = counters["round"]
-            op["prefixes"].append(f"round-{op['round']}:")
+            op[field] = counters["round"]
+            op["prefixes"].append(f"round-{op[field]}:")
+
         if kind == "rank":
+            next_round("round")
             op["next"] = max(self.numbers(), default=0) + 1
+        if kind == "ask-codex" and self.st["decisions"]:
+            # Under --no-decision-rounds, a decision only Claude has ranked
+            # gets a ranking round first; the rest get a follow-up round.
+            asked = numbers or sorted(self.numbers())
+            entries = self.st["decisions"]
+            op["unranked"] = [
+                n for n in asked if not entries[str(n)].get("codex")
+            ]
+            op["ranked"] = [n for n in asked if n not in op["unranked"]]
+            if op["unranked"]:
+                next_round("ranking_round")
+            if op["ranked"]:
+                next_round("round")
         self.st["op"] = op
         self.save()
         transcript.append_once(
@@ -874,7 +935,11 @@ class Runner:
             out,
             heading=f"{label} — answer",
         )
-        self.show("Claude", op["n"], answer, Path.cwd() / self.path(out))
+        self.show(
+            f"Claude's answer to question {op['n']}",
+            answer,
+            Path.cwd() / self.path(out),
+        )
 
     def ask_codex(self, op: dict) -> None:
         """The developer's words to the same Codex thread: with the latest
@@ -884,37 +949,110 @@ class Runner:
         answer."""
         words = self.path(op["words"]).read_text(encoding="utf-8")
         label = self.label(op)
-        if "round" not in op:
+        if "round" not in op and "ranking_round" not in op:
+            key = f"ask-codex-{op['n']}:codex"
             reply = self.codex_step(
-                f"ask-codex-{op['n']}:codex",
+                key,
                 cli.compose(["shared/reviewer-question"], self.state, words),
                 f"{label} — sent to Codex",
                 f"{label} — answer",
             )
-            key = f"ask-codex-{op['n']}:codex"
-            self.show("Codex", op["n"], reply, self.reply_file(key))
+            self.show(
+                f"Codex's answer to question {op['n']}",
+                reply,
+                self.reply_file(key),
+            )
             return
-        n, numbers = op["round"], op["asked"] or sorted(self.numbers())
-        body = join(
-            "\n\n".join(self.latest_sections(numbers)),
-            f"My question:\n\n{words}",
-        )
-        key = f"round-{n}:codex"
-        reply = self.codex_step(
-            key,
-            cli.compose(
-                ["shared/decision-followup-reviewer"], self.state, body
-            ),
-            f"Decision round {n} — sent to Codex",
-            f"Decision round {n} — Codex response",
-        )
-        self.merge(n, numbers, reply, LATEST_PART_4)
+        replies, merged = [], []
+        if op.get("ranking_round"):
+            n, numbers = op["ranking_round"], op["unranked"]
+            self.describe(op, numbers)
+            key = f"round-{n}:codex"
+            ranking = self.codex_step(
+                key,
+                cli.compose(
+                    ["shared/decision-ranking", "shared/reviewer-guard"],
+                    self.state,
+                    join(
+                        self.descriptions(numbers), f"My question:\n\n{words}"
+                    ),
+                ),
+                f"Decision round {n} — sent to Codex",
+                f"Decision round {n} — Codex ranking",
+            )
+            self.merge(n, numbers, ranking, PLAN_PART_4)
+            for number in numbers:
+                self.st["decisions"][str(number)]["codex"] = True
+            self.save()
+            title = (
+                f"Codex's ranking of {listing(numbers)} (decision round {n})"
+            )
+            replies.append((title, ranking, key))
+            merged += numbers
+        if op.get("round"):
+            n, numbers = op["round"], op["ranked"]
+            body = join(
+                "\n\n".join(self.latest_sections(numbers)),
+                f"My question:\n\n{words}",
+            )
+            key = f"round-{n}:codex"
+            reply = self.codex_step(
+                key,
+                cli.compose(
+                    ["shared/decision-followup-reviewer"], self.state, body
+                ),
+                f"Decision round {n} — sent to Codex",
+                f"Decision round {n} — Codex response",
+            )
+            self.merge(n, numbers, reply, LATEST_PART_4)
+            replies.append(
+                (f"Codex's answer to question {op['n']}", reply, key)
+            )
+            merged += numbers
         report = self.write_report()
-        self.show("Codex", op["n"], reply, self.reply_file(key))
-        print(
-            f"Claude merged Codex's reply into {listing(numbers)} (decision "
-            f"round {n}). Report: {report}"
+        for title, reply, key in replies:
+            self.show(title, reply, self.reply_file(key))
+        rounds = " and ".join(
+            str(op[field])
+            for field in ("ranking_round", "round")
+            if op.get(field)
         )
+        plural = "rounds" if " and " in rounds else "round"
+        print(
+            f"Claude merged Codex's reply into {listing(sorted(merged))} "
+            f"(decision {plural} {rounds}). Report: {report}"
+        )
+
+    def describe(self, op: dict, numbers: list[int]) -> None:
+        """Under --no-decision-rounds, Codex has never seen Part 3, so
+        Claude copies the descriptions of these decisions for it first."""
+        missing = [
+            n
+            for n in numbers
+            if "description" not in self.st["decisions"][str(n)]
+        ]
+        if not missing:
+            return
+        key = f"ask-codex-{op['n']}:decision-copy"
+        text = self.claude_step(
+            key,
+            f"decision copy q{op['n']}",
+            DECISION_COPY,
+            self.template(
+                "runner/decision-copy-chosen", numbers=and_list(missing)
+            ),
+            f"messages/06-decisions-q{op['n']}.md",
+        )
+        _, source = self.checked(
+            key,
+            text,
+            self.titled(missing),
+            f"fix-up decision copy q{op['n']}",
+            DECISION_COPY,
+        )
+        for n in missing:
+            self.st["decisions"][str(n)]["description"] = source
+        self.save()
 
     def rank(self, op: dict) -> None:
         """New decisions to rank: Claude describes them in Part 3's
@@ -1033,15 +1171,15 @@ class Runner:
     def reply_file(self, key: str) -> Path:
         return Path.cwd() / self.path(self.st["steps"][key]["out"])
 
-    def show(self, who: str, n: int, answer: str, path: Path) -> None:
+    def show(self, title: str, answer: str, path: Path) -> None:
         """Print a short answer word for word, or say where a long one is."""
         if len(answer) <= ANSWER_LIMIT:
-            print(f"{who}'s answer to question {n}:\n\n{answer.strip()}\n")
+            print(f"{title}:\n\n{answer.strip()}\n")
             print(f"Saved in: {path}")
         else:
             print(
-                f"{who}'s answer to question {n} is {len(answer):,} "
-                f"characters, so it's in a file: {path}"
+                f"{title} is {len(answer):,} characters, so it's in a file: "
+                f"{path}"
             )
 
     # --- stops ---------------------------------------------------------------
@@ -1054,11 +1192,13 @@ class Runner:
         self.report_stop()
 
     def write_report(self) -> Path:
-        plan = self.path("messages/05-plan.md").read_text(encoding="utf-8")
+        plan_file = self.st.get("plan", "messages/05-plan.md")
+        plan = self.path(plan_file).read_text(encoding="utf-8")
         latest = []
         for n in sorted(self.numbers()):
             entry = self.st["decisions"][str(n)].get("latest")
-            if entry:
+            # Options that are still the plan's own Part 4 aren't repeated.
+            if entry and not entry.get("in_plan"):
                 text = self.path(entry["file"]).read_text(encoding="utf-8")
                 latest.append((entry["label"], decisions.sections(text)[n]))
         report = self.review / "report.md"
@@ -1076,8 +1216,8 @@ class Runner:
         print(f"The review is at a stop, {what}. Report: {report}")
 
 
-def run(name: str, retry: bool) -> None:
-    runner = Runner(name, retry)
+def run(name: str, retry: bool, alone: bool = False) -> None:
+    runner = Runner(name, retry, alone)
     with Lock(runner.review):
         runner.st = runner.load()
         runner.run()

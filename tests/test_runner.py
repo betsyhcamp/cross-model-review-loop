@@ -1054,3 +1054,115 @@ def test_groups_are_counted_only_under_implement_now():
     plan = plan_with(2) + "\n\n## Notes\n### Group 9: not counted"
     assert runner.groups(plan) == 2
     assert runner.groups("No sections.") == 0
+
+
+# --- without decision rounds -------------------------------------------------
+
+PLAN_ALONE = (
+    "FAKE-PLAN\n\nPart 3 — Decisions\n1. First: FAKE-PART3-ONE\n"
+    "2. Second: FAKE-PART3-TWO\n\n"
+    "## Part 4 — Options for the open decisions (Claude)\n\n"
+    "### Decision 1: First\nFAKE-CLAUDE-OPTIONS-1\n\n"
+    "### Decision 2: Second\nFAKE-CLAUDE-OPTIONS-2\n"
+)
+
+
+def alone_env(review, **claude: str) -> dict[str, str]:
+    return with_decisions(
+        review,
+        **{
+            "plan": PLAN_ALONE,
+            "decision-copy-q": "### Decision 1: First\nFAKE-COPIED-ONE",
+            "decision-copy-q2": "### Decision 2: Second\nFAKE-COPIED-TWO",
+            **claude,
+        },
+    )
+
+
+def test_without_decision_rounds_the_plan_ends_with_claudes_own_part_4(
+    review,
+):
+    result = review.run("--no-decision-rounds", **alone_env(review))
+    assert result.returncode == 0, result.stderr
+    template = (ROOT / "templates/runner/plan-part4-alone.md").read_text()
+    plan = claude_call(review, "claude-plan")
+    assert plan["prompt"].endswith(template)
+    assert len(review.calls("claude")) == 3  # no decision copy or ranking
+    assert len(review.calls("codex")) == 2
+    assert review.headings() == HEADINGS
+    report = (review.path / "report.md").read_text()
+    assert "FAKE-CLAUDE-OPTIONS-2" in report
+    assert "Latest options" not in report
+    assert "with 2 open decisions" in result.stdout
+    assert review.run_state()["no_decision_rounds"] is True
+
+
+def test_codex_ranks_a_decision_only_claude_has_ranked(review):
+    env = alone_env(review)
+    assert review.run("--no-decision-rounds", **env).returncode == 0
+    result = ask(review, "ask-codex", 1, WORDS, "--decisions", "1", **env)
+    assert result.returncode == 0, result.stderr
+    copy = claude_call(review, "decision-copy-q1")
+    assert "Part 3 descriptions of decisions 1 only" in copy["prompt"]
+    sent = review.calls("codex")[-1]["stdin"]
+    state = json.loads((review.path / "state.json").read_text())
+    assert sent == cli.compose(
+        ["shared/decision-ranking", "shared/reviewer-guard"],
+        state,
+        f"### Decision 1: First\nFAKE-COPIED-ONE\n\nMy question:\n\n{WORDS}",
+    )
+    assert not any(
+        "ranking-r" in c["argv"][-1] for c in review.calls("claude")
+    )
+    merge = claude_call(review, "merge-r2")
+    assert (
+        "Your own view is your Part 4 in the Step 5 plan." in (merge["prompt"])
+    )
+    report = (review.path / "report.md").read_text()
+    assert "### Decision 1: First\n_From decision round 2_" in report
+    assert "### Decision 2: Second\n_" not in report
+    assert result.stdout.startswith(
+        "Codex's ranking of decision 1 (decision round 2):"
+    )
+
+
+def test_a_question_on_both_kinds_of_decision_ranks_first_then_follows_up(
+    review,
+):
+    env = alone_env(review)
+    assert review.run("--no-decision-rounds", **env).returncode == 0
+    assert (
+        ask(
+            review, "ask-codex", 1, WORDS, "--decisions", "1", **env
+        ).returncode
+        == 0
+    )
+    result = ask(review, "ask-codex", 2, "Both, please.", **env)
+    assert result.returncode == 0, result.stderr
+    headings = review.headings()
+    assert headings.index("Decision round 3 — Codex ranking") < (
+        headings.index("Decision round 4 — Codex response")
+    )
+    ranking_sent = review.calls("codex")[-2]["stdin"]
+    assert "### Decision 2: Second\nFAKE-COPIED-TWO" in ranking_sent
+    follow_up_sent = review.calls("codex")[-1]["stdin"]
+    assert "### Decision 1: First\nFAKE-MERGED-1" in follow_up_sent
+    report = (review.path / "report.md").read_text()
+    assert "### Decision 1: First\n_From decision round 4_" in report
+    assert "### Decision 2: Second\n_From decision round 3_" in report
+    assert "(decision rounds 3 and 4)" in result.stdout
+
+
+def test_part_4_headings_out_of_sequence_are_fixed_in_the_plan(review):
+    bad = PLAN_ALONE.replace("### Decision 2:", "### Decision 3:")
+    env = alone_env(review, plan=bad, **{"fix-up-plan": PLAN_ALONE})
+    result = review.run("--no-decision-rounds", **env)
+    assert result.returncode == 0, result.stderr
+    assert "Step 5 — Claude final plan — headings fixed" in review.headings()
+    titles = {
+        k: v["title"] for k, v in review.run_state()["decisions"].items()
+    }
+    assert titles == {"1": "First", "2": "Second"}
+    report = (review.path / "report.md").read_text()
+    assert "### Decision 2: Second" in report
+    assert "### Decision 3:" not in report

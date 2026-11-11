@@ -496,7 +496,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="send again a call that may have run",
     )
-    p.set_defaults(run=lambda a: runner.run(a.name, a.retry_uncertain))
+    p.add_argument(
+        "--no-decision-rounds",
+        action="store_true",
+        help="end the plan with Claude's own ranking, with no Codex round",
+    )
+    p.set_defaults(
+        run=lambda a: runner.run(
+            a.name, a.retry_uncertain, a.no_decision_rounds
+        )
+    )
 
     for command, what in (
         ("ask-claude", "send the developer's words to the review's Claude"),
