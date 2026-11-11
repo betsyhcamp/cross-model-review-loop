@@ -6,7 +6,7 @@ error_after_work (fails after a tool call) | no_result | wrong_session |
 empty | timeout (sleeps) | mode_default (Auto switches off after startup,
 as when it isn't available) | sandbox_broken (the shell command fails to
 start its sandbox) | edit_tracked (edits a.txt) | slow (a tool call, then
-a second's wait).
+a second's wait) | refused_tools (two refused tool calls and a failed one).
 
 The answer is FAKE_CLAUDE_TEXT if set, else "FAKE-CLAUDE-ANSWER". A
 preflight prompt (it names the sandbox mark) gets a Bash call that prints
@@ -233,6 +233,28 @@ if MARK in prompt:
     else:
         tool_round("toolu_1", "Bash", {"command": f"echo {MARK}"}, f"{MARK}\n")
         answer = MARK
+elif case == "refused_tools":
+    tool_round(
+        "toolu_1",
+        "Read",
+        {"file_path": "/elsewhere/log.jsonl"},
+        "File is in a directory that is denied by your permission settings.",
+        error=True,
+    )
+    tool_round(
+        "toolu_2",
+        "Bash",
+        {"command": "echo x > a.txt"},
+        "Exit code 1\n(eval):1: operation not permitted: a.txt",
+        error=True,
+    )
+    tool_round(
+        "toolu_3",
+        "Bash",
+        {"command": "pytest -q"},
+        "Exit code 1\n1 failed",
+        error=True,
+    )
 elif case in ("slow", "error_after_work", "no_result"):
     tool_round("toolu_1", "Read", {"file_path": "a.txt"}, "one\n")
     if case == "slow":

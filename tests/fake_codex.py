@@ -9,7 +9,8 @@ incomplete | nonfatal_error | nonjson | empty | edit_tracked |
 edit_then_exit (edits a tracked file, then fails) | commit | create_untracked
 | slow (runs one command, then takes a second to finish) | active_writer
 (refuses a second writer, as codex-cli 0.160.1 does) | exit_after_start
-(starts the turn, then exits nonzero).
+(starts the turn, then exits nonzero) | commands (runs a command that
+works, one the sandbox refuses and one that fails).
 
 Per call, FAKE_CODEX_CASES and FAKE_CODEX_ANSWERS are JSON objects mapping
 part of the run folder's name (from the -o path) to a case or a response,
@@ -128,6 +129,27 @@ threads = {"no_thread": 0, "dup_thread": 2}.get(case, 1)
 for _ in range(threads):
     emit({"type": "thread.started", "thread_id": session})
 emit({"type": "turn.started"})
+if case == "commands":
+    for i, (command, code, output) in enumerate(
+        [
+            ("/bin/zsh -lc 'rg -n retry sync.py'", 0, "12: retry"),
+            ("/bin/zsh -lc 'touch x'", 1, "touch: x: Operation not permitted"),
+            ("/bin/zsh -lc 'pytest -q'", 1, "1 failed"),
+        ]
+    ):
+        emit(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": f"cmd_{i}",
+                    "type": "command_execution",
+                    "command": command,
+                    "exit_code": code,
+                    "aggregated_output": output,
+                    "status": "completed",
+                },
+            }
+        )
 if case == "exit_after_start":
     print("stream disconnected", file=sys.stderr)
     sys.exit(1)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -137,6 +138,47 @@ def run(
 def turn_started(run_dir: Path) -> bool:
     events = (run_dir / "events.jsonl").read_text(errors="replace")
     return '"turn.started"' in events
+
+
+# A command Codex's read-only sandbox refused. Any other failed command is
+# an ordinary failure.
+REFUSAL = re.compile(r"operation not permitted|read-only file system", re.I)
+
+
+def stats(run_dir: Path) -> dict:
+    """Commands run so far, refusals counted apart from ordinary
+    failures, and the last few commands, with none of Codex's text."""
+    path = run_dir / "events.jsonl"
+    commands = []
+    if path.exists():
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item") if isinstance(event, dict) else None
+            if (
+                event.get("type") == "item.completed"
+                and isinstance(item, dict)
+                and item.get("type") == "command_execution"
+            ):
+                commands.append(item)
+    failed = [c for c in commands if c.get("exit_code") not in (0, None)]
+    refused = [
+        c for c in failed if REFUSAL.search(str(c.get("aggregated_output")))
+    ]
+    actions = []
+    for item in commands[-3:]:
+        command = str(item.get("command", ""))
+        # Codex wraps each command in its shell: /bin/zsh -lc "..."
+        command = re.sub(r"^\S*sh -lc ", "", command).strip("'\"")
+        actions.append(" ".join(command.split())[:60])
+    return {
+        "tools": len(commands),
+        "refused": len(refused),
+        "failed": len(failed) - len(refused),
+        "actions": actions,
+    }
 
 
 def report_progress(run_dir: Path, elapsed: float) -> None:

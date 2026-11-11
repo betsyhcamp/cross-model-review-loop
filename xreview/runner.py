@@ -486,7 +486,9 @@ class Runner:
         if rec and rec["status"] == DONE:
             return
         run_dir = transcript.new_run(self.review, "claude setup check")
-        rec = self.new_step(key, run_dir, label="Claude setup check")
+        rec = self.new_step(
+            key, run_dir, provider="claude", label="Claude setup check"
+        )
         try:
             claude.preflight(Path.cwd(), run_dir.resolve())
         except (claude.CallFailed, claude.CallUncertain) as exc:

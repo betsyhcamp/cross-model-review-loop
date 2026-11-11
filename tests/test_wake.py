@@ -137,3 +137,14 @@ def test_the_stop_hold_ends_when_session_a_closes(review):
         session.kill()
         session.wait()
     assert wait_until(lambda: hold["pid"] not in holds())
+
+
+def test_status_at_a_stop_restarts_the_hold(review):
+    assert review.run().returncode == 0
+    first = stop_hold(review)
+    result = review.xreview("status", review.name)
+    assert result.returncode == 0, result.stderr
+    second = stop_hold(review)
+    assert second["pid"] != first["pid"]
+    assert not procs.alive(first["pid"], first["started"])
+    assert second["pid"] in holds()

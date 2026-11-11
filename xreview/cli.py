@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from . import runner, transcript
+from . import runner, status, transcript
 from .providers import claude, codex
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
@@ -506,6 +506,10 @@ def main(argv: list[str] | None = None) -> int:
             a.name, a.retry_uncertain, a.no_decision_rounds
         )
     )
+
+    p = sub.add_parser("status", help="show where a review stands")
+    p.add_argument("name")
+    p.set_defaults(run=lambda a: status.status(a.name))
 
     for command, what in (
         ("ask-claude", "send the developer's words to the review's Claude"),
