@@ -1166,3 +1166,34 @@ def test_part_4_headings_out_of_sequence_are_fixed_in_the_plan(review):
     report = (review.path / "report.md").read_text()
     assert "### Decision 2: Second" in report
     assert "### Decision 3:" not in report
+
+
+def test_a_retried_operation_keeps_its_numbers(stopped):
+    env = stopped.decisions_env
+    question = {"FAKE_CLAUDE_CASES": json.dumps({"question-1": "no_result"})}
+    assert ask(stopped, "ask-claude", 1, **env, **question).returncode == 4
+    assert (
+        ask(
+            stopped, "ask-claude", 1, WORDS, "--retry-uncertain", **env
+        ).returncode
+        == 0
+    )
+    round_two = {"FAKE_CODEX_CASES": json.dumps({"round-2": "incomplete"})}
+    assert (
+        ask(stopped, "ask-codex", 2, "Again?", **env, **round_two).returncode
+        == 4
+    )
+    assert (
+        ask(
+            stopped, "ask-codex", 2, "Again?", "--retry-uncertain", **env
+        ).returncode
+        == 0
+    )
+    counters = stopped.run_state()["counters"]
+    assert (counters["ask-claude"], counters["ask-codex"]) == (1, 1)
+    assert counters["round"] == 2
+    headings = stopped.headings()
+    assert "Question 1 for Claude — answer" in headings
+    assert "Decision round 2 — Codex response (attempt 2)" in headings
+    assert not any(h.startswith("Decision round 3") for h in headings)
+    assert not any(h.startswith("Question 2") for h in headings)
