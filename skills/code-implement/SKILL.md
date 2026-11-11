@@ -1,5 +1,5 @@
 ---
-description: Session B or a fresh session. Implement a review's Decided Plan as one commit per group, then run the tests and record Final Changes.
+description: Session A or a fresh session. Implement a review's Decided Plan as one commit per group, then run the tests and record Final Changes.
 argument-hint: <review-name>
 disable-model-invocation: true
 allowed-tools: Bash(xreview *) Bash(git add *) Bash(git commit *)
@@ -9,7 +9,7 @@ allowed-tools: Bash(xreview *) Bash(git add *) Bash(git commit *)
 
 Review name: $0
 
-This session implements the Decided Plan of a finished review. It may be Session B or a fresh session with no history. If no review name was passed to this command, ask the user for it and stop.
+This session implements the Decided Plan of a finished review. It may be Session A, the session that wrote the code, or a fresh session with no history. If no review name was passed to this command, ask the user for it and stop.
 
 First run `xreview prompt --template shared/protocol` and follow it. Never push.
 

@@ -235,8 +235,8 @@ def test_tree_check(repo, review):
     assert (
         f"HEAD has moved since prepare (reviewed {repo.head[:7]}, now "
         f"{later[:7]}). This review covers {repo.head[:7]} only. To "
-        "review the new commits, re-run code-prepare in the session "
-        "that wrote the code."
+        "review the new commits, run /xreview:code-review again in the "
+        "session that wrote the code."
     ) in result.stderr
 
 
@@ -329,7 +329,21 @@ def test_every_template_a_skill_names_exists():
         # fails here instead of being skipped.
         assert text.count("--template") == len(found), skill
         names.update(found)
-    assert len(names) >= 5, names
+    assert len(names) >= 4, names
+    for name in sorted(names):
+        assert (ROOT / "templates" / f"{name}.md").is_file(), name
+
+
+def test_every_template_the_runner_names_exists():
+    """The runner reads its prompts from templates; a renamed or missing
+    one would only fail mid-review."""
+    names = set()
+    for module in ("runner.py", "status.py"):
+        text = (ROOT / "xreview" / module).read_text()
+        names.update(
+            re.findall(r'"((?:code|shared|runner)/[a-z0-9-]+)"', text)
+        )
+    assert len(names) >= 15, names
     for name in sorted(names):
         assert (ROOT / "templates" / f"{name}.md").is_file(), name
 
