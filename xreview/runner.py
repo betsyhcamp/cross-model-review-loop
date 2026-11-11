@@ -34,6 +34,14 @@ CODEX_RESPONSE = "Step 4 — Codex response"
 PLAN = "Step 5 — Claude final plan"
 DECISION_COPY = "Decision copy"
 RANKED_BY_BOTH = "the ranking you wrote before seeing the reviewer's"
+LATEST_PART_4 = "your latest Part 4 for these decisions"
+# An answer this long or shorter is printed for Session A to show word for
+# word; a longer one is left in its file.
+ANSWER_LIMIT = 2000
+OPERATIONS = {
+    "ask-claude": "Question {n} for Claude",
+    "ask-codex": "Question {n} for Codex",
+}
 
 
 def crash(point: str) -> None:
@@ -46,6 +54,14 @@ def write_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def listing(numbers: list[int]) -> str:
+    """ "decision 2", or "decisions 1, 2 and 4"."""
+    if len(numbers) == 1:
+        return f"decision {numbers[0]}"
+    head = ", ".join(str(n) for n in numbers[:-1])
+    return f"decisions {head} and {numbers[-1]}"
 
 
 def join(*parts: str) -> str:
@@ -127,6 +143,8 @@ class Runner:
             "op": None,
             "stopped": False,
             "decisions": {},
+            "counters": {},
+            "dropped": [],
         }
 
     def save(self) -> None:
@@ -177,11 +195,10 @@ class Runner:
 
     # --- recovering a step an earlier run left pending -----------------------
 
-    def recover(self, rec: dict, finished, who: str) -> str | None:
+    def settle(self, rec: dict, finished, who: str):
         """The answer of a step an earlier run left pending, or None if
-        --retry-uncertain allows resending it. A reviewer that's still
-        running is waited for; one that finished on its own has its answer
-        used. Otherwise the step is uncertain and the run stops."""
+        there's none. A reviewer that's still running is waited for, and
+        one that finished on its own has its answer used."""
         run_dir = self.path(rec["run"])
         pid, started = rec.get("pid"), rec.get("started")
         if not pid:
@@ -213,11 +230,15 @@ class Runner:
                     f"The runner was stopped ({exc}) while waiting for {who}, "
                     f"which was killed. {rec['label']} may have run."
                 ) from exc
-        text = finished(run_dir)
-        if text is not None:
-            return text
-        if self.retry:
-            return None
+        return finished(run_dir)
+
+    def recover(self, rec: dict, finished, who: str):
+        """The answer of a step an earlier run left pending, or None if
+        --retry-uncertain allows resending it. With neither, the step is
+        uncertain and the run stops."""
+        found = self.settle(rec, finished, who)
+        if found is not None or self.retry:
+            return found
         rec["status"] = UNCERTAIN
         self.save()
         raise procs.CallUncertain(
@@ -225,6 +246,12 @@ class Runner:
             "incomplete answer, so it wasn't sent again. To send it again, "
             "run the same command with --retry-uncertain."
         )
+
+    def codex_finished(self, run_dir: Path):
+        try:
+            return codex.parse(run_dir, self.state["reviewer_session_id"])
+        except (codex.CallFailed, codex.CallUncertain):
+            return None
 
     def pending(self, key: str, finished, who: str):
         """(answer, resend) for a step that isn't done: an answer recovered
@@ -247,14 +274,9 @@ class Runner:
         if rec and rec["status"] == DONE:
             return self.path(rec["out"]).read_text(encoding="utf-8")
         expected = self.state["reviewer_session_id"]
-
-        def finished(run_dir: Path) -> tuple[str, str] | None:
-            try:
-                return codex.parse(run_dir, expected)
-            except (codex.CallFailed, codex.CallUncertain):
-                return None
-
-        found, resend = self.pending(key, finished, codex.DISPLAY_NAME)
+        found, resend = self.pending(
+            key, self.codex_finished, codex.DISPLAY_NAME
+        )
         if found:
             return self.codex_accept(self.st["steps"][key], *found)
         problems = cli.tree_problems(self.state)
@@ -270,6 +292,7 @@ class Runner:
         rec = self.new_step(
             key,
             run_dir,
+            provider="codex",
             label=received,
             received=received,
             out=str((run_dir / "response.md").relative_to(self.review)),
@@ -353,6 +376,7 @@ class Runner:
         rec = self.new_step(
             key,
             run_dir,
+            provider="claude",
             label=label,
             out=out,
             heading=heading,
@@ -448,8 +472,13 @@ class Runner:
         self.finish(rec)
 
     def run(self) -> None:
-        """Start the review, or pick it up from the last finished step."""
-        if self.st["stopped"] and not self.st["op"]:
+        """Start the review, or pick it up from the last finished step,
+        including an operation at a stop that's still pending."""
+        op = self.st["op"]
+        if op and op["kind"] != "run":
+            self.resume(op)
+            return
+        if self.st["stopped"] and not op:
             self.report_stop()
             return
         if not self.st["op"]:
@@ -627,6 +656,9 @@ class Runner:
             blocked=self.codex_copies(),
         )
         self.merge(n, numbers, ranking, RANKED_BY_BOTH)
+        for number in numbers:
+            self.st["decisions"][str(number)]["codex"] = True
+        self.save()
 
     def codex_copies(self) -> list[Path]:
         """Everywhere a copy of Codex's ranking is kept: the review's run
@@ -670,9 +702,230 @@ class Runner:
             }
         self.save()
 
+    # --- operations at a stop ------------------------------------------------
+
+    def words(self, given: str) -> str:
+        """The developer's words, from a file in the review's inbox/."""
+        path = cli.review_file(self.review, given)
+        inbox = (self.review / "inbox").resolve()
+        if not path.is_relative_to(inbox):
+            raise cli.CheckFailed(
+                f"--file must name a file in {self.review}/inbox/, such as "
+                "inbox/3.txt."
+            )
+        return path.read_text(encoding="utf-8")
+
+    def label(self, op: dict) -> str:
+        return OPERATIONS[op["kind"]].format(n=op["n"])
+
+    def at_stop(self, kind: str, given: str, numbers: list[int] | None):
+        """Carry the developer's words to a reviewer. The same command and
+        words as a pending operation pick it up; anything else drops it,
+        once any answer it has left is recorded."""
+        if not self.st["stopped"]:
+            raise cli.CheckFailed(
+                "The review hasn't reached its first stop yet, so there's "
+                f"nothing to {kind} about. Run `xreview run {self.name}` to "
+                "pick it up."
+            )
+        words = self.words(given)
+        op = self.st["op"]
+        if op:
+            same = (
+                op["kind"] == kind
+                and self.path(op["words"]).read_text(encoding="utf-8") == words
+                and op.get("asked") == numbers
+            )
+            if same:
+                self.resume(op)
+                return
+            self.drop(op, kind)
+        self.resume(self.create(kind, words, numbers))
+
+    def create(self, kind: str, words: str, numbers: list[int] | None):
+        """A new operation, numbered now, with a copy of the words, which
+        the transcript records before any reviewer sees them."""
+        if numbers is not None:
+            unknown = [
+                n for n in numbers if str(n) not in self.st["decisions"]
+            ]
+            if unknown:
+                known = sorted(self.numbers())
+                listed = ", ".join(str(n) for n in known) or "none"
+                raise cli.CheckFailed(
+                    f"There's no decision {unknown[0]}. The open decisions "
+                    f"are {listed}. To have a new decision ranked, use rank."
+                )
+        counters = self.st["counters"]
+        counters[kind] = counters.get(kind, 0) + 1
+        op = {"kind": kind, "n": counters[kind], "asked": numbers}
+        op["words"] = f"messages/{kind}-{op['n']}-words.md"
+        write_atomic(self.path(op["words"]), words)
+        op["prefixes"] = [f"{kind}-{op['n']}:"]
+        if kind == "ask-codex" and self.st["decisions"]:
+            counters["round"] = max(counters.get("round", 1), 1) + 1
+            op["round"] = counters["round"]
+            op["prefixes"].append(f"round-{op['round']}:")
+        self.st["op"] = op
+        self.save()
+        transcript.append_once(
+            self.review,
+            f"{self.label(op)} — your words",
+            words,
+            transcript.now(),
+        )
+        return op
+
+    def drop(self, op: dict, kind: str) -> None:
+        """Drop a pending operation for a new one. A reviewer still working
+        on it is waited for, and any answer it finished is recorded, but
+        nothing is resent. A question whose answer turns out to be
+        complete isn't dropped."""
+        if op["kind"] == "run":
+            raise cli.CheckFailed(
+                "The review hasn't reached its first stop yet. Run "
+                f"`xreview run {self.name}` to pick it up."
+            )
+        steps = {
+            key: rec
+            for key, rec in self.st["steps"].items()
+            if key.startswith(tuple(op["prefixes"]))
+        }
+        for rec in steps.values():
+            if rec["status"] not in (LAUNCHED, UNCERTAIN):
+                continue
+            if rec["provider"] == "codex":
+                found = self.settle(rec, self.codex_finished, "Codex")
+                if found is not None:
+                    self.codex_accept(rec, *found)
+            else:
+                found = self.settle(
+                    rec,
+                    lambda d, s=rec["session"]: claude.finished(d, s),
+                    "Claude",
+                )
+                if found is not None:
+                    self.claude_accept(rec, found)
+        label = self.label(op)
+        single = "round" not in op and len(steps) == 1
+        if single and all(rec["status"] == DONE for rec in steps.values()):
+            (rec,) = steps.values()
+            print(
+                f"xreview: {label} finished after all. Its answer is in "
+                f"{Path.cwd() / self.path(rec['out'])}",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            moved_to = OPERATIONS[kind].format(
+                n=self.st["counters"].get(kind, 0) + 1
+            )
+            transcript.append(
+                self.review,
+                f"{label} — dropped",
+                f"You moved on to {moved_to} before {label} had a complete "
+                "answer, so it was dropped. Nothing was resent.",
+                transcript.now(),
+            )
+            self.st["dropped"].append(label)
+            print(f"xreview: {label} was dropped.", file=sys.stderr)
+        self.st["op"] = None
+        self.save()
+
+    def resume(self, op: dict) -> None:
+        if op["kind"] == "ask-claude":
+            self.ask_claude(op)
+        elif op["kind"] == "ask-codex":
+            self.ask_codex(op)
+        self.st["op"] = None
+        self.save()
+
+    def ask_claude(self, op: dict) -> None:
+        """The developer's words, unchanged, to the same Session B."""
+        label = self.label(op)
+        out = f"messages/ask-claude-{op['n']}.md"
+        answer = self.claude_step(
+            f"ask-claude-{op['n']}:claude",
+            f"question {op['n']}",
+            f"{label} — answer",
+            self.path(op["words"]).read_text(encoding="utf-8"),
+            out,
+            heading=f"{label} — answer",
+        )
+        self.show("Claude", op["n"], answer, Path.cwd() / self.path(out))
+
+    def ask_codex(self, op: dict) -> None:
+        """The developer's words to the same Codex thread: with the latest
+        options of the decisions they name, or of every decision if they
+        name none, followed by Claude's merge of those decisions. With no
+        open decisions, the words go alone. Codex's own reply is the
+        answer."""
+        words = self.path(op["words"]).read_text(encoding="utf-8")
+        label = self.label(op)
+        if "round" not in op:
+            reply = self.codex_step(
+                f"ask-codex-{op['n']}:codex",
+                cli.compose(["shared/reviewer-question"], self.state, words),
+                f"{label} — sent to Codex",
+                f"{label} — answer",
+            )
+            key = f"ask-codex-{op['n']}:codex"
+            self.show("Codex", op["n"], reply, self.reply_file(key))
+            return
+        n, numbers = op["round"], op["asked"] or sorted(self.numbers())
+        body = join(
+            "\n\n".join(self.latest_sections(numbers)),
+            f"My question:\n\n{words}",
+        )
+        key = f"round-{n}:codex"
+        reply = self.codex_step(
+            key,
+            cli.compose(
+                ["shared/decision-followup-reviewer"], self.state, body
+            ),
+            f"Decision round {n} — sent to Codex",
+            f"Decision round {n} — Codex response",
+        )
+        self.merge(n, numbers, reply, LATEST_PART_4)
+        report = self.write_report()
+        self.show("Codex", op["n"], reply, self.reply_file(key))
+        print(
+            f"Claude merged Codex's reply into {listing(numbers)} (decision "
+            f"round {n}). Report: {report}"
+        )
+
+    def latest_sections(self, numbers: list[int]) -> list[str]:
+        sections = []
+        for n in numbers:
+            entry = self.st["decisions"][str(n)]["latest"]
+            text = self.path(entry["file"]).read_text(encoding="utf-8")
+            sections.append(decisions.sections(text)[n])
+        return sections
+
+    def reply_file(self, key: str) -> Path:
+        return Path.cwd() / self.path(self.st["steps"][key]["out"])
+
+    def show(self, who: str, n: int, answer: str, path: Path) -> None:
+        """Print a short answer word for word, or say where a long one is."""
+        if len(answer) <= ANSWER_LIMIT:
+            print(f"{who}'s answer to question {n}:\n\n{answer.strip()}\n")
+            print(f"Saved in: {path}")
+        else:
+            print(
+                f"{who}'s answer to question {n} is {len(answer):,} "
+                f"characters, so it's in a file: {path}"
+            )
+
     # --- stops ---------------------------------------------------------------
 
     def stop(self) -> None:
+        self.write_report()
+        self.st["stopped"] = True
+        self.st["op"] = None
+        self.save()
+        self.report_stop()
+
+    def write_report(self) -> Path:
         plan = self.path("messages/05-plan.md").read_text(encoding="utf-8")
         latest = []
         for n in sorted(self.numbers()):
@@ -680,14 +933,9 @@ class Runner:
             if entry:
                 text = self.path(entry["file"]).read_text(encoding="utf-8")
                 latest.append((entry["label"], decisions.sections(text)[n]))
-        write_atomic(
-            self.review / "report.md",
-            decisions.report(self.name, plan, latest),
-        )
-        self.st["stopped"] = True
-        self.st["op"] = None
-        self.save()
-        self.report_stop()
+        report = self.review / "report.md"
+        write_atomic(report, decisions.report(self.name, plan, latest))
+        return Path.cwd() / report
 
     def report_stop(self) -> None:
         report = Path.cwd() / self.review / "report.md"
@@ -705,3 +953,16 @@ def run(name: str, retry: bool) -> None:
     with Lock(runner.review):
         runner.st = runner.load()
         runner.run()
+
+
+def at_stop(
+    kind: str,
+    name: str,
+    given: str,
+    retry: bool,
+    numbers: list[int] | None = None,
+) -> None:
+    runner = Runner(name, retry)
+    with Lock(runner.review):
+        runner.st = runner.load()
+        runner.at_stop(kind, given, numbers)

@@ -458,6 +458,20 @@ def append(name: str, heading: str, file: str) -> None:
     print(f'Appended "{heading}" to {review / transcript.TRANSCRIPT}.')
 
 
+def decision_numbers(text: str) -> list[int]:
+    """Decision numbers such as "2,4", in the order given, without
+    repeats."""
+    try:
+        numbers = [int(part) for part in text.split(",") if part.strip()]
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} isn't a list of decision numbers such as 2,4."
+        ) from None
+    if not numbers:
+        raise argparse.ArgumentTypeError("no decision numbers given.")
+    return list(dict.fromkeys(numbers))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="xreview", description="Cross-model review runner."
@@ -483,6 +497,34 @@ def main(argv: list[str] | None = None) -> int:
         help="send again a call that may have run",
     )
     p.set_defaults(run=lambda a: runner.run(a.name, a.retry_uncertain))
+
+    for command, what in (
+        ("ask-claude", "send the developer's words to the review's Claude"),
+        ("ask-codex", "send the developer's words to the review's Codex"),
+    ):
+        p = sub.add_parser(command, help=what)
+        p.add_argument("name")
+        p.add_argument(
+            "--file",
+            required=True,
+            help="the developer's words, in inbox/ in the review folder",
+        )
+        p.add_argument("--retry-uncertain", action="store_true")
+        if command == "ask-codex":
+            p.add_argument(
+                "--decisions",
+                type=decision_numbers,
+                help="the decisions the words are about, such as 2,4",
+            )
+        p.set_defaults(
+            run=lambda a, kind=command: runner.at_stop(
+                kind,
+                a.name,
+                a.file,
+                a.retry_uncertain,
+                getattr(a, "decisions", None),
+            )
+        )
 
     p = sub.add_parser("start", help="send the reviewer prompt to Codex")
     p.add_argument("name")

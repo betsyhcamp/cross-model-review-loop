@@ -616,3 +616,287 @@ def test_a_crash_before_claudes_ranking_keeps_it_blind_when_resent(review):
     assert ranking["prompt"].startswith(resend_note())
     assert ranking["leaks"] == {"readable": [], "in_prompt": False}
     assert len(review.calls("codex")) == 3
+
+
+# --- operations at a stop --------------------------------------------------
+
+WORDS = (
+    'Re decision #2 -- is `retry_after=0` ok?? I lean "no".\n'
+    "Also: teh comment at sync.py:47 is wrong."
+)
+
+
+def ask(review, kind, n, words=WORDS, *flags, **env):
+    """Write the words to inbox/<n>.txt and run kind on them."""
+    inbox = review.path / "inbox"
+    inbox.mkdir(exist_ok=True)
+    (inbox / f"{n}.txt").write_text(words)
+    return review.xreview(
+        kind, review.name, "--file", f"inbox/{n}.txt", *flags, **env
+    )
+
+
+@pytest.fixture
+def stopped(review):
+    """A review at its first stop, with two open decisions."""
+    env = with_decisions(review)
+    assert review.run(**env).returncode == 0
+    review.decisions_env = env
+    return review
+
+
+def test_ask_claude_carries_the_words_unchanged_to_the_same_session(
+    stopped,
+):
+    result = ask(stopped, "ask-claude", 1, **stopped.decisions_env)
+    assert result.returncode == 0, result.stderr
+    question = stopped.calls("claude")[-1]
+    assert question["prompt"] == WORDS
+    rebuttal = stopped.calls("claude")[1]
+    assert question["session"] == rebuttal["session"] and not question["new"]
+    headings = stopped.headings()
+    assert headings[-2:] == [
+        "Question 1 for Claude — your words",
+        "Question 1 for Claude — answer",
+    ]
+    assert "## Question 1 for Claude — your words\n_" in stopped.transcript()
+    assert WORDS in stopped.transcript()
+    answer = stopped.path / "messages/ask-claude-1.md"
+    assert result.stdout == (
+        "Claude's answer to question 1:\n\nFAKE-CLAUDE-ANSWER\n\n"
+        f"Saved in: {answer}\n"
+    )
+
+
+def test_a_long_answer_is_left_in_its_file(stopped):
+    env = with_decisions(stopped, **{"question-1": "x" * 2500})
+    result = ask(stopped, "ask-claude", 1, **env)
+    assert result.returncode == 0, result.stderr
+    answer = stopped.path / "messages/ask-claude-1.md"
+    assert result.stdout == (
+        "Claude's answer to question 1 is 2,500 characters, so it's in a "
+        f"file: {answer}\n"
+    )
+
+
+def test_ask_codex_sends_every_decisions_latest_options_and_the_words(
+    stopped,
+):
+    result = ask(stopped, "ask-codex", 1, **stopped.decisions_env)
+    assert result.returncode == 0, result.stderr
+    state = json.loads((stopped.path / "state.json").read_text())
+    body = (
+        "### Decision 1: First\nFAKE-MERGED-1\n\n"
+        "### Decision 2: Second\nFAKE-MERGED-2\n\n"
+        f"My question:\n\n{WORDS}"
+    )
+    sent = stopped.calls("codex")[-1]["stdin"]
+    assert sent == cli.compose(
+        ["shared/decision-followup-reviewer"], state, body
+    )
+    assert stopped.headings()[-4:] == [
+        "Question 1 for Codex — your words",
+        "Decision round 2 — sent to Codex",
+        "Decision round 2 — Codex response",
+        "Decision round 2 — Claude merged options",
+    ]
+    merge = claude_call(stopped, "merge-r2")
+    assert (
+        "Your own view is your latest Part 4 for these decisions."
+        in (merge["prompt"])
+    )
+    assert "Claude merged Codex's reply into decisions 1 and 2" in (
+        result.stdout
+    )
+    assert result.stdout.startswith(
+        "Codex's answer to question 1:\n\nFAKE-CODEX-RESPONSE\n"
+    )
+    report = (stopped.path / "report.md").read_text()
+    assert report.count("_From decision round 2_") == 2
+
+
+def test_ask_codex_with_numbers_covers_only_those_decisions(stopped):
+    result = ask(
+        stopped,
+        "ask-codex",
+        1,
+        WORDS,
+        "--decisions",
+        "2",
+        **stopped.decisions_env,
+    )
+    assert result.returncode == 0, result.stderr
+    sent = stopped.calls("codex")[-1]["stdin"]
+    assert "### Decision 2: Second" in sent
+    assert "### Decision 1: First" not in sent
+    merge = claude_call(stopped, "merge-r2")
+    assert merge["prompt"].endswith(
+        "This round covers these decisions:\n\n### Decision 2: Second\n"
+    )
+    report = (stopped.path / "report.md").read_text()
+    assert "### Decision 1: First\n_From decision round 1_" in report
+    assert "### Decision 2: Second\n_From decision round 2_" in report
+    assert "into decision 2 (decision round 2)" in result.stdout
+
+
+def test_a_decision_that_doesnt_exist_is_refused_with_a_pointer_to_rank(
+    stopped,
+):
+    before = stopped.counts()
+    result = ask(stopped, "ask-codex", 1, WORDS, "--decisions", "2,5")
+    assert result.returncode == 1
+    assert "There's no decision 5. The open decisions are 1, 2." in (
+        result.stderr
+    )
+    assert "use rank" in result.stderr
+    assert stopped.counts() == before
+    assert stopped.run_state()["counters"].get("ask-codex") is None
+
+
+def test_ask_codex_with_no_open_decisions_sends_the_words_alone(review):
+    assert review.run().returncode == 0
+    result = ask(review, "ask-codex", 1)
+    assert result.returncode == 0, result.stderr
+    state = json.loads((review.path / "state.json").read_text())
+    assert review.calls("codex")[-1]["stdin"] == cli.compose(
+        ["shared/reviewer-question"], state, WORDS
+    )
+    assert review.headings()[-3:] == [
+        "Question 1 for Codex — your words",
+        "Question 1 for Codex — sent to Codex",
+        "Question 1 for Codex — answer",
+    ]
+    assert len(review.calls("claude")) == 4  # no merge
+    assert "Codex's answer to question 1:" in result.stdout
+
+
+@pytest.mark.parametrize("where", ["messages", "absolute"])
+def test_words_from_outside_the_inbox_are_refused(stopped, where):
+    outside = stopped.path / "messages" / "x.md"
+    outside.write_text("words\n")
+    given = "messages/x.md" if where == "messages" else str(outside)
+    before = stopped.counts()
+    result = stopped.xreview("ask-claude", stopped.name, "--file", given)
+    assert result.returncode == 1
+    assert "--file must name a file in" in result.stderr
+    assert stopped.counts() == before
+
+
+def test_operations_before_the_first_stop_are_refused(review):
+    result = ask(review, "ask-claude", 1)
+    assert result.returncode == 1
+    assert "hasn't reached its first stop" in result.stderr
+    assert review.counts() == (0, 0)
+
+
+def test_an_uncertain_question_is_resent_only_on_request(stopped):
+    cases = {
+        "FAKE_CLAUDE_CASES": json.dumps({"question-1": "error_after_work"})
+    }
+    env = {**stopped.decisions_env, **cases}
+    assert ask(stopped, "ask-claude", 1, **env).returncode == 4
+    before = stopped.counts()
+    assert ask(stopped, "ask-claude", 1, **env).returncode == 4
+    assert stopped.counts() == before
+    result = ask(
+        stopped,
+        "ask-claude",
+        1,
+        WORDS,
+        "--retry-uncertain",
+        **stopped.decisions_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stopped.calls("claude")[-1]["prompt"] == (
+        resend_note() + "\n\n" + WORDS + "\n"
+    )
+
+
+def test_moving_on_drops_an_uncertain_question_without_resending_it(
+    stopped,
+):
+    cases = {
+        "FAKE_CLAUDE_CASES": json.dumps({"question-1": "error_after_work"})
+    }
+    assert (
+        ask(
+            stopped, "ask-claude", 1, **stopped.decisions_env, **cases
+        ).returncode
+        == 4
+    )
+    result = ask(
+        stopped,
+        "ask-codex",
+        2,
+        "Another thing.",
+        "--decisions",
+        "1",
+        **stopped.decisions_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Question 1 for Claude was dropped." in result.stderr
+    assert "Question 1 for Claude — dropped" in stopped.headings()
+    questions = [
+        c for c in stopped.calls("claude") if "question-1" in c["argv"][-1]
+    ]
+    assert len(questions) == 1
+    assert stopped.run_state()["dropped"] == ["Question 1 for Claude"]
+
+
+def test_a_question_whose_reviewer_outlived_its_runner_is_finished(stopped):
+    sleeps = {"FAKE_CLAUDE_SLEEPS": json.dumps({"question-1": 4})}
+    inbox = stopped.path / "inbox"
+    inbox.mkdir()
+    (inbox / "1.txt").write_text(WORDS)
+    runner = subprocess.Popen(
+        [str(XREVIEW), "ask-claude", stopped.name, "--file", "inbox/1.txt"],
+        cwd=stopped.repo.path,
+        env=stopped.env(**stopped.decisions_env, **sleeps),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stopped.wait_for_reviewer("ask-claude-1:claude")
+    kill(runner.pid)
+    runner.wait()
+    result = ask(
+        stopped,
+        "ask-codex",
+        2,
+        "Next.",
+        "--decisions",
+        "1",
+        **stopped.decisions_env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Question 1 for Claude finished after all" in result.stderr
+    assert "Question 1 for Claude — answer" in stopped.headings()
+    assert "Question 1 for Claude — dropped" not in stopped.headings()
+
+
+def test_run_picks_up_a_pending_question(stopped):
+    cases = {
+        "FAKE_CLAUDE_CASES": json.dumps({"question-1": "error_after_work"})
+    }
+    assert (
+        ask(
+            stopped, "ask-claude", 1, **stopped.decisions_env, **cases
+        ).returncode
+        == 4
+    )
+    assert stopped.run(**stopped.decisions_env).returncode == 4
+    result = stopped.run("--retry-uncertain", **stopped.decisions_env)
+    assert result.returncode == 0, result.stderr
+    assert "Claude's answer to question 1:" in result.stdout
+
+
+def test_a_moved_head_ends_the_stops(repo, stopped):
+    repo.commit("c.txt", "later\n", "Later commit")
+    result = ask(stopped, "ask-claude", 1)
+    assert result.returncode == 1
+    assert "HEAD has moved since prepare" in result.stderr
+
+
+def test_bad_decision_numbers_are_a_usage_error(stopped):
+    result = ask(stopped, "ask-codex", 1, WORDS, "--decisions", "two")
+    assert result.returncode == 2
