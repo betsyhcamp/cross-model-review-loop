@@ -168,12 +168,18 @@ def kill_group(pid: int) -> None:
 
 def ps(*args: str) -> str:
     """ps output, with a fixed locale and time zone so start times compare
-    equal across calls. ps is looked up on PATH, then in /bin."""
+    equal across calls, or "" if ps can't run. ps is looked up on PATH,
+    then in /bin."""
     command = shutil.which("ps") or "/bin/ps"
     env = {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
-    result = subprocess.run(
-        [command, *args], capture_output=True, text=True, env=env
-    )
+    try:
+        result = subprocess.run(
+            [command, *args], capture_output=True, text=True, env=env
+        )
+    except OSError:
+        # Inside another sandbox, macOS may refuse to run ps. Then no
+        # process can be recognized, which is the cautious answer.
+        return ""
     return result.stdout
 
 

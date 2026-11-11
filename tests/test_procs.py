@@ -122,3 +122,13 @@ def test_run_reports_the_process_as_it_starts(tmp_path):
     assert pid != os.getpid() and started
     assert (tmp_path / "prompt.md").read_text() == "the prompt\n"
     assert (tmp_path / "events.jsonl").read_text() == "the prompt\n\n"
+
+
+def test_a_ps_that_cant_run_recognizes_no_process(monkeypatch, sleeper):
+    def refused(*args, **kwargs):
+        raise PermissionError(1, "Operation not permitted", "/bin/ps")
+
+    monkeypatch.setattr(procs.subprocess, "run", refused)
+    assert procs.identity(sleeper.pid) is None
+    assert not procs.alive(sleeper.pid, "anything")
+    assert procs.find("anything") is None
