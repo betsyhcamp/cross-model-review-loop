@@ -161,7 +161,10 @@ def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
     """Session B's settings for one turn: the sandbox, with the repo
     write-denied and the blocked paths read-denied for shell commands and
     their children, plus Read deny rules for the same paths, because
-    Claude's own Read, Grep and Glob aren't covered by the sandbox."""
+    Claude's own Read, Grep and Glob aren't covered by the sandbox. The
+    output style is the default whatever the developer's settings say:
+    the Explanatory and Learning styles add Insight blocks, which would
+    go to Codex with Claude's replies."""
     logs, _ = places(repo, session)
     blocked = [*other_sessions(repo, session), *extra]
     # The pattern also covers a log created after the folder was listed.
@@ -179,6 +182,7 @@ def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
             },
         },
         "permissions": {"deny": rules},
+        "outputStyle": "default",
     }
 
 

@@ -139,6 +139,11 @@ def test_the_sandbox_is_forced_and_the_repo_is_write_denied(repo, call):
     assert sandbox["filesystem"]["denyWrite"] == [str(repo.path)]
 
 
+def test_the_output_style_is_the_default_whatever_the_user_chose(repo, call):
+    call()
+    assert last_call(repo)["settings"]["outputStyle"] == "default"
+
+
 def test_other_sessions_are_blocked_and_session_bs_own_folders_arent(
     repo, folders, call
 ):
