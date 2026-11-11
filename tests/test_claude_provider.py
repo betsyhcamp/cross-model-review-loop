@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
+import tempfile
 
 import pytest
 
@@ -137,6 +139,14 @@ def test_the_sandbox_is_forced_and_the_repo_is_write_denied(repo, call):
     assert sandbox["failIfUnavailable"] is True
     assert sandbox["allowUnsandboxedCommands"] is False
     assert sandbox["filesystem"]["denyWrite"] == [str(repo.path)]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS's temp folder")
+def test_macos_per_user_temp_folder_is_writable(repo, call):
+    call()
+    allowed = last_call(repo)["settings"]["sandbox"]["filesystem"]
+    temp = Path(tempfile.gettempdir()).resolve()
+    assert allowed["allowWrite"] == [str(temp)]
 
 
 def test_the_output_style_is_the_default_whatever_the_user_chose(repo, call):

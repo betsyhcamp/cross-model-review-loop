@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 from typing import Callable
 
@@ -157,9 +158,27 @@ def read_rule(path: Path, folder: bool) -> str:
     return f"Read({escape(path)}{'/**' if folder else ''})"
 
 
+def user_temp() -> list[str]:
+    """macOS's per-user temp folder. `mktemp -d` makes its folders there
+    even when TMPDIR names another, so the sandbox must let Session B
+    write there for ordinary scripts and tests to work. Linux has none."""
+    if sys.platform != "darwin":
+        return []
+    try:
+        found = subprocess.run(
+            ["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except OSError:
+        return []
+    return [str(Path(found).resolve())] if found else []
+
+
 def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
     """Session B's settings for one turn: the sandbox, with the repo
-    write-denied and the blocked paths read-denied for shell commands and
+    write-denied, temp folders writable, and the blocked paths read-denied
+    for shell commands and
     their children, plus Read deny rules for the same paths, because
     Claude's own Read, Grep and Glob aren't covered by the sandbox. The
     output style is the default whatever the developer's settings say:
@@ -177,6 +196,7 @@ def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
             "failIfUnavailable": True,
             "allowUnsandboxedCommands": False,
             "filesystem": {
+                "allowWrite": user_temp(),
                 "denyWrite": [str(repo)],
                 "denyRead": [str(path) for path in blocked],
             },
