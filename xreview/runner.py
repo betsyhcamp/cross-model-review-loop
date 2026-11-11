@@ -39,6 +39,11 @@ RANKED_BY_BOTH = "the ranking you wrote before seeing the reviewer's"
 LATEST_PART_4 = "your latest Part 4 for these decisions"
 PLAN_PART_4 = "your Part 4 in the Step 5 plan"
 IN_PLAN = "Claude's own, in Part 4 of the plan above"
+# An absolute path in the handoff or the developer's words, which shares
+# that file or folder with Session B.
+NAMED_PATH = re.compile(
+    r"(?<![\w/.~])(~/[^\s`'\"<>()\[\]]+|/[^\s`'\"<>()\[\]]+)"
+)
 # An answer this long or shorter is printed for Session A to show word for
 # word; a longer one is left in its file.
 ANSWER_LIMIT = 2000
@@ -184,6 +189,24 @@ class Runner:
         for key, value in {"name": self.name, **fields}.items():
             text = text.replace("{" + key + "}", value)
         return text.rstrip("\n")
+
+    def shared_paths(self) -> list[Path]:
+        """Paths Session B may read even where other agents' records are
+        blocked: the absolute paths the handoff names, and those named in
+        the developer's words so far. Naming a file shares it."""
+        texts = []
+        handoff = self.review / "claude-handoff.md"
+        if handoff.exists():
+            texts.append(handoff.read_text(encoding="utf-8"))
+        for words in sorted((self.review / "messages").glob("*-words.md")):
+            texts.append(words.read_text(encoding="utf-8"))
+        found: list[Path] = []
+        for text in texts:
+            for match in NAMED_PATH.findall(text):
+                path = Path(os.path.expanduser(match.rstrip(".,:;!?")))
+                if len(path.parts) > 2 and path.exists() and path not in found:
+                    found.append(path)
+        return found
 
     def resent(self, prompt: str) -> str:
         return join(self.template("runner/resend-note"), prompt)
@@ -419,6 +442,8 @@ class Runner:
                 first,
                 blocked,
                 self.recorder(rec),
+                review=self.review.resolve(),
+                shared=self.shared_paths(),
             )
         except (claude.CallFailed, claude.CallUncertain) as exc:
             self.fail(rec, run_dir, exc, claude.DISPLAY_NAME)

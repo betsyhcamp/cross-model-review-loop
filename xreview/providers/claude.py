@@ -3,10 +3,11 @@ that runs `claude`.
 
 Every turn runs in Claude Code's sandbox with Auto permission mode. The
 repo is write-denied, shell commands can't escape the sandbox, and only the
-read, shell and web tools exist. Each turn also blocks reads of this
-project's other conversations: their logs, saved tool output, subagent
-logs and scratch folders, and the project's memory folder. A turn can block
-more paths, as Claude's blind ranking does for every copy of Codex's.
+read, shell and web tools exist. Each turn also blocks reads of other
+agents' records: other Claude Code sessions' conversations, saved output,
+subagent logs, scratch folders and memory, the developer's Claude Code
+history, and Codex's home folder (see blocked()). A turn can block more
+paths, as Claude's blind ranking does for every copy of Codex's.
 """
 
 from __future__ import annotations
@@ -104,48 +105,141 @@ def config_dir() -> Path:
     return Path(found) if found else Path.home() / ".claude"
 
 
+# Claude Code shortens a longer folder name to its first 200 characters,
+# a dash and a six-character hash of the path (Claude Code 2.1.319).
+NAME_LIMIT = 200
+
+
+def project_folder(parent: Path, name: str) -> Path:
+    """The folder Claude Code files a project under in parent. For a long
+    name, that's the one existing folder whose name starts the same; if
+    there's none yet, a name no folder has."""
+    if len(name) <= NAME_LIMIT:
+        return parent / name
+    start = name[:NAME_LIMIT]
+    found = [
+        p
+        for p in (parent.glob(f"{start}-*") if parent.is_dir() else [])
+        if len(p.name) == NAME_LIMIT + 7
+    ]
+    return found[0] if len(found) == 1 else parent / start
+
+
+def exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:  # a name too long for the file system
+        return False
+
+
 def places(repo: Path, session: str | None) -> tuple[Path, Path]:
     """This project's folder of conversation logs, and its folder of
     scratch folders, as Claude Code names them for a session started in
     repo. If a folder holding this session exists elsewhere, that one is
-    used, in case Claude Code names a long path differently."""
+    used, in case Claude Code names a path differently."""
     name = slug(repo.resolve())
     projects = config_dir() / "projects"
-    logs = projects / name
-    if session and not (logs / f"{session}.jsonl").exists():
+    logs = project_folder(projects, name)
+    if session and not exists(logs / f"{session}.jsonl"):
         moved = list(projects.glob(f"*/{session}.jsonl"))
         if moved:
             logs = moved[0].parent
     root = Path(os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp").resolve()
     tmp_root = root / f"claude-{os.getuid()}"
-    scratch = tmp_root / name
-    if session and not (scratch / session).is_dir():
+    scratch = project_folder(tmp_root, name)
+    if session and not exists(scratch / session):
         moved = [p for p in tmp_root.glob(f"*/{session}") if p.is_dir()]
         if moved:
             scratch = moved[0].parent
     return logs, scratch
 
 
-def other_sessions(repo: Path, session: str | None) -> list[Path]:
-    """What Session B must not read of this project's other conversations:
-    every top-level log (Session A's included), the memory folder, and
-    every other session's folder of saved output and subagent logs and its
-    scratch folder. Session B's own folders stay readable. The folders are
-    listed now, so a session started during the turn isn't covered."""
+# Folders where Claude Code makes a file for Session B as it starts, which
+# Session B's own shell then reads, such as its shell snapshot. Their
+# entries are blocked one by one, so the new file stays readable.
+PER_ENTRY = frozenset({"shell-snapshots", "session-env"})
+# What other sessions leave at the top of Claude Code's temp root. The
+# rest of it is shared temp space, Session B's own work included.
+TMP_LEFTOVERS = re.compile(r"^(cache-break-state-.*\.json|bash-edit-diff)$")
+
+
+def around(root: Path, keep: list[Path]) -> list[Path]:
+    """Every existing entry under root to block so that only the paths in
+    keep, and anything created after this, stay readable. A folder that
+    holds a kept path, or is named in PER_ENTRY, is entered rather than
+    blocked. Deny rules can't have exceptions, which is why the entries
+    around a kept path are blocked one by one."""
+    if not root.is_dir():
+        return []
+    found = []
+    for entry in sorted(root.iterdir()):
+        if entry in keep:
+            continue
+        holds = any(k.is_relative_to(entry) for k in keep)
+        if holds or (entry.name in PER_ENTRY and entry.is_dir()):
+            found += around(entry, keep)
+        else:
+            found.append(entry)
+    return found
+
+
+def codex_home() -> Path:
+    found = os.environ.get("CODEX_HOME")
+    return Path(found) if found else Path.home() / ".codex"
+
+
+def blocked(
+    repo: Path,
+    session: str | None,
+    review: Path | None = None,
+    shared: list[Path] | tuple = (),
+) -> list[Path]:
+    """What Session B must not read, listed fresh for each turn: other
+    agents' records and the developer's private Claude Code data.
+
+    - Everything in Claude Code's home folder (every project's
+      conversations, saved output, subagent logs and memory, the prompt
+      history, file history, session keys and shell snapshots), except
+      Session B's own session folder.
+    - Every session folder in Claude Code's temp root, scratchpads and
+      background-task output included, except Session B's own, and what
+      other sessions leave at its top. The rest of that root is shared temp
+      space, where Session B's own work goes too.
+    - Codex's home folder, and the review's sibling review folders.
+
+    The repo and the shared paths (files the handoff or the developer
+    named) are never blocked, wherever they are. Something another session
+    creates during the turn isn't covered until the next turn.
+    """
+    repo = repo.resolve()
     logs, scratch = places(repo, session)
-    blocked = []
-    if logs.is_dir():
-        for entry in sorted(logs.iterdir()):
-            if entry.is_file() and entry.suffix == ".jsonl":
-                blocked.append(entry)
-            elif entry.is_dir() and entry.name != session:
-                blocked.append(entry)
-    blocked.append(logs / "memory")
-    if scratch.is_dir():
-        for entry in sorted(scratch.iterdir()):
-            if entry.is_dir() and entry.name != session:
-                blocked.append(entry)
-    return blocked
+    keep = [repo, *(Path(p).resolve() for p in shared)]
+    if session:
+        keep += [logs.resolve() / session, scratch.resolve() / session]
+    found = around(config_dir().resolve(), keep)
+    memory = logs.resolve() / "memory"
+    if memory not in found and not exists(memory):
+        found.append(memory)  # in case a memory folder appears mid-turn
+    tmp_root = scratch.resolve().parent
+    if tmp_root.is_dir():
+        for entry in sorted(tmp_root.iterdir()):
+            if entry in keep:
+                continue
+            if entry.name.startswith("-") and entry.is_dir():
+                found += around(entry, keep)
+            elif TMP_LEFTOVERS.match(entry.name):
+                found.append(entry)
+    home = codex_home().resolve()
+    if any(k.is_relative_to(home) for k in keep):
+        found += around(home, keep)
+    else:
+        found.append(home)
+    if review is not None and review.parent.is_dir():
+        here = review.resolve()
+        for entry in sorted(here.parent.iterdir()):
+            if entry.is_dir() and entry != here:
+                found.append(entry)
+    return found
 
 
 def escape(path: Path) -> str:
@@ -175,7 +269,13 @@ def user_temp() -> list[str]:
     return [str(Path(found).resolve())] if found else []
 
 
-def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
+def settings(
+    repo: Path,
+    session: str | None,
+    extra: list[Path],
+    review: Path | None = None,
+    shared: list[Path] | tuple = (),
+) -> dict:
     """Session B's settings for one turn: the sandbox, with the repo
     write-denied, temp folders writable, and the blocked paths read-denied
     for shell commands and
@@ -184,11 +284,12 @@ def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
     output style is the default whatever the developer's settings say:
     the Explanatory and Learning styles add Insight blocks, which would
     go to Codex with Claude's replies."""
-    logs, _ = places(repo, session)
-    blocked = [*other_sessions(repo, session), *extra]
-    # The pattern also covers a log created after the folder was listed.
-    rules = [f"Read({escape(logs)}/*.jsonl)"]
-    for path in blocked:
+    denied = [*blocked(repo, session, review, shared), *extra]
+    # The pattern also covers a conversation log created after the folders
+    # were listed.
+    projects = config_dir().resolve() / "projects"
+    rules = [f"Read({escape(projects)}/*/*.jsonl)"]
+    for path in denied:
         rules.append(read_rule(path, folder=not path.is_file()))
     return {
         "sandbox": {
@@ -198,7 +299,7 @@ def settings(repo: Path, session: str | None, extra: list[Path]) -> dict:
             "filesystem": {
                 "allowWrite": user_temp(),
                 "denyWrite": [str(repo)],
-                "denyRead": [str(path) for path in blocked],
+                "denyRead": [str(path) for path in denied],
             },
         },
         "permissions": {"deny": rules},
@@ -250,14 +351,20 @@ def turn(
     first: bool,
     extra_blocked: list[Path] | None = None,
     on_start: OnStart = None,
+    review: Path | None = None,
+    shared: list[Path] | tuple = (),
 ) -> str:
     """Send one message to Session B and return its final message, which
-    is also saved as run_dir/response.md. first starts the session."""
+    is also saved as run_dir/response.md. first starts the session.
+    review is the review's folder, so its sibling reviews are blocked;
+    shared are paths the handoff or the developer named, which stay
+    readable."""
     claude = binary()
-    blocked = list(extra_blocked or [])
+    extra = list(extra_blocked or [])
     settings_file = run_dir / "settings.json"
     settings_file.write_text(
-        json.dumps(settings(repo, session, blocked), indent=2) + "\n",
+        json.dumps(settings(repo, session, extra, review, shared), indent=2)
+        + "\n",
         encoding="utf-8",
     )
     execute(

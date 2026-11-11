@@ -1197,3 +1197,65 @@ def test_a_retried_operation_keeps_its_numbers(stopped):
     assert "Decision round 2 — Codex response (attempt 2)" in headings
     assert not any(h.startswith("Decision round 3") for h in headings)
     assert not any(h.startswith("Question 2") for h in headings)
+
+
+# --- what Session B may read -------------------------------------------------
+
+
+def other_scratch(review, name: str) -> Path:
+    """A file in another session's scratch folder for this repo."""
+    import os as _os
+
+    from xreview.providers import claude as _claude
+
+    root = Path(review.repo.env["CLAUDE_CODE_TMPDIR"]).resolve()
+    folder = (
+        root
+        / f"claude-{_os.getuid()}"
+        / _claude.slug(review.repo.path.resolve())
+        / "33333333-3333-4333-8333-333333333333"
+        / "scratchpad"
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_text("x\n")
+    return path
+
+
+def readable(call: dict, path: Path) -> bool:
+    denied = call["settings"]["sandbox"]["filesystem"]["denyRead"]
+    return not any(path.resolve().is_relative_to(Path(p)) for p in denied)
+
+
+def test_files_the_handoff_names_are_shared_and_their_neighbors_arent(
+    review,
+):
+    shared = other_scratch(review, "break_sync.py")
+    hidden = other_scratch(review, "mutate.py")
+    (review.path / "claude-handoff.md").write_text(
+        f"Read these:\n- {shared} (the script behind finding 2)\n"
+    )
+    assert review.run().returncode == 0
+    for call in review.calls("claude")[1:]:  # every Session B turn
+        assert readable(call, shared)
+        assert not readable(call, hidden)
+
+
+def test_a_file_named_in_your_words_is_shared_from_then_on(stopped):
+    named = other_scratch(stopped, "notes.md")
+    words = f"Ask about this: look at `{named}`, please."
+    env = stopped.decisions_env
+    assert ask(stopped, "ask-claude", 1, words, **env).returncode == 0
+    assert readable(stopped.calls("claude")[-1], named)
+    assert ask(stopped, "ask-claude", 2, "And again?", **env).returncode == 0
+    assert readable(stopped.calls("claude")[-1], named)
+
+
+def test_other_reviews_are_blocked_but_this_one_isnt(repo, review):
+    earlier = repo.path / ".reviews" / "an-earlier-review"
+    earlier.mkdir()
+    (earlier / "transcript.md").write_text("old\n")
+    assert review.run().returncode == 0
+    for call in review.calls("claude")[1:]:
+        assert not readable(call, earlier / "transcript.md")
+        assert readable(call, review.path / "claude-handoff.md")

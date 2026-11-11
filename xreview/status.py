@@ -142,7 +142,16 @@ def reopen(job: runner.Runner) -> list[str]:
     if job.st.get("claude_started") and session:
         settings = Path.cwd() / job.review / "session-b-settings.json"
         settings.write_text(
-            json.dumps(claude.settings(Path.cwd(), session, []), indent=2)
+            json.dumps(
+                claude.settings(
+                    Path.cwd(),
+                    session,
+                    [],
+                    job.review.resolve(),
+                    job.shared_paths(),
+                ),
+                indent=2,
+            )
             + "\n",
             encoding="utf-8",
         )

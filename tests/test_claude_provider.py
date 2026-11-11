@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 
@@ -34,26 +35,42 @@ SESSION_B_FLAGS = [
 
 
 class Folders:
-    """A test's own Claude Code folders for the repo."""
+    """A test's own Claude Code and Codex folders for the repo, with what
+    Session B keeps and what it mustn't read."""
 
     def __init__(self, repo):
         name = claude.slug(repo.path.resolve())
         self.config = repo.tmp / "claude-config"
-        self.logs = self.config / "projects" / name
+        self.projects = self.config / "projects"
+        self.logs = self.projects / name
         self.tmp = repo.tmp / "claude-tmp"
-        self.scratch = self.tmp / f"claude-{os.getuid()}" / name
+        self.tmp_root = self.tmp / f"claude-{os.getuid()}"
+        self.scratch = self.tmp_root / name
+        self.codex = repo.tmp / "codex-home"
         for path in (
             self.logs / SESSION / "tool-results",
             self.logs / OTHER / "subagents",
             self.logs / "memory",
+            self.projects / "-another-project" / OTHER,
+            self.config / "file-history" / OTHER,
+            self.config / "sessions",
+            self.config / "shell-snapshots",
             self.scratch / SESSION / "scratchpad",
             self.scratch / OTHER / "scratchpad",
             self.scratch / OTHER / "tasks",
+            self.tmp_root / "-another-project" / OTHER / "scratchpad",
+            self.tmp_root / "xcopy",
+            self.codex / "sessions",
         ):
             path.mkdir(parents=True)
         for path in (
             self.logs / f"{SESSION}.jsonl",
             self.logs / f"{OTHER}.jsonl",
+            self.config / "history.jsonl",
+            self.config / "sessions" / "1.json",
+            self.config / "shell-snapshots" / "snapshot-old.sh",
+            self.tmp_root / f"cache-break-state-{OTHER}.json",
+            self.codex / "auth.json",
         ):
             path.write_text("{}\n")
 
@@ -63,6 +80,7 @@ def folders(repo, monkeypatch) -> Folders:
     found = Folders(repo)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(found.config))
     monkeypatch.setenv("CLAUDE_CODE_TMPDIR", str(found.tmp))
+    monkeypatch.setenv("CODEX_HOME", str(found.codex))
     return found
 
 
@@ -83,6 +101,8 @@ def call(repo, run_dir, folders, monkeypatch):
         first: bool = True,
         extra: list[Path] | None = None,
         prompt: str = "Rebut this.\n",
+        review: Path | None = None,
+        shared: tuple = (),
         **env: str,
     ):
         env = {
@@ -93,9 +113,24 @@ def call(repo, run_dir, folders, monkeypatch):
         }
         for key, value in env.items():
             monkeypatch.setenv(key, value)
-        return claude.turn(prompt, repo.path, run_dir, SESSION, first, extra)
+        return claude.turn(
+            prompt,
+            repo.path,
+            run_dir,
+            SESSION,
+            first,
+            extra,
+            review=review,
+            shared=shared,
+        )
 
     return run
+
+
+def denied(repo) -> set[str]:
+    return set(
+        last_call(repo)["settings"]["sandbox"]["filesystem"]["denyRead"]
+    )
 
 
 def last_call(repo) -> dict:
@@ -154,29 +189,102 @@ def test_the_output_style_is_the_default_whatever_the_user_chose(repo, call):
     assert last_call(repo)["settings"]["outputStyle"] == "default"
 
 
-def test_other_sessions_are_blocked_and_session_bs_own_folders_arent(
+def test_claude_codes_home_is_blocked_except_session_bs_own_folder(
     repo, folders, call
 ):
     call()
-    settings = last_call(repo)["settings"]
-    denied = set(settings["sandbox"]["filesystem"]["denyRead"])
-    expected = {
-        folders.logs / f"{SESSION}.jsonl",
-        folders.logs / f"{OTHER}.jsonl",
+    found = denied(repo)
+    for path in (
+        folders.config / "history.jsonl",
+        folders.config / "file-history",
+        folders.config / "sessions",
+        folders.config / "shell-snapshots" / "snapshot-old.sh",
+        folders.projects / "-another-project",
         folders.logs / OTHER,
+        folders.logs / f"{OTHER}.jsonl",
+        folders.logs / f"{SESSION}.jsonl",
         folders.logs / "memory",
-        folders.scratch / OTHER,
-    }
-    assert denied == {str(path) for path in expected}
-    rules = settings["permissions"]["deny"]
-    assert f"Read(/{folders.logs}/*.jsonl)" in rules
+    ):
+        assert str(path) in found, path
+    # Session B's own saved output stays readable, and so does a shell
+    # snapshot Claude Code makes for it as it starts.
+    for path in (
+        folders.logs / SESSION,
+        folders.logs,
+        folders.projects,
+        folders.config / "shell-snapshots",
+    ):
+        assert str(path) not in found, path
+    rules = last_call(repo)["settings"]["permissions"]["deny"]
+    assert f"Read(/{folders.projects}/*/*.jsonl)" in rules
     assert f"Read(/{folders.logs / OTHER}/**)" in rules
-    assert f"Read(/{folders.logs / 'memory'}/**)" in rules
-    assert f"Read(/{folders.scratch / OTHER}/**)" in rules
-    assert f"Read(/{folders.logs / OTHER}.jsonl)" in rules
-    for own in (folders.logs / SESSION, folders.scratch / SESSION):
-        assert str(own) not in denied
-        assert not any(str(own) + "/" in rule for rule in rules)
+    assert f"Read(/{folders.config / 'history.jsonl'})" in rules
+
+
+def test_other_sessions_scratch_is_blocked_but_shared_temp_space_isnt(
+    repo, folders, call
+):
+    call()
+    found = denied(repo)
+    for path in (
+        folders.scratch / OTHER,
+        folders.tmp_root / "-another-project" / OTHER,
+        folders.tmp_root / f"cache-break-state-{OTHER}.json",
+    ):
+        assert str(path) in found, path
+    for path in (
+        folders.scratch / SESSION,
+        folders.scratch,
+        folders.tmp_root,
+        folders.tmp_root / "xcopy",
+    ):
+        assert str(path) not in found, path
+
+
+def test_codex_home_and_other_reviews_are_blocked(repo, folders, call):
+    reviews = repo.path / ".reviews"
+    for name in ("this", "earlier"):
+        (reviews / name).mkdir(parents=True)
+    call(review=reviews / "this")
+    found = denied(repo)
+    assert str(folders.codex.resolve()) in found
+    assert str((reviews / "earlier").resolve()) in found
+    assert str((reviews / "this").resolve()) not in found
+
+
+def test_the_repo_is_never_blocked_even_inside_a_scratch_folder(
+    repo, folders, monkeypatch, run_dir
+):
+    inside = folders.scratch / OTHER / "scratchpad" / "work" / "repo"
+    shutil.copytree(repo.path, inside, symlinks=True)
+    (folders.scratch / OTHER / "scratchpad" / "notes.md").write_text("x\n")
+    for key, value in {
+        "PATH": repo.env["PATH"],
+        "FAKE_CLAUDE_LOG": str(repo.tmp / "claude-calls.jsonl"),
+    }.items():
+        monkeypatch.setenv(key, value)
+    claude.turn("Go.", inside, run_dir, SESSION, True)
+    found = denied(repo)
+    resolved = inside.resolve()
+    assert not any(resolved.is_relative_to(Path(p)) for p in found)
+    for path in (
+        folders.scratch / OTHER / "tasks",
+        folders.scratch / OTHER / "scratchpad" / "notes.md",
+    ):
+        assert str(path.resolve()) in found, path
+
+
+def test_named_files_stay_readable_and_their_neighbors_dont(
+    repo, folders, call
+):
+    shared = folders.scratch / OTHER / "scratchpad" / "break_sync.py"
+    shared.write_text("x\n")
+    (folders.scratch / OTHER / "scratchpad" / "mutate.py").write_text("x\n")
+    call(shared=(shared,))
+    found = denied(repo)
+    assert not any(shared.resolve().is_relative_to(Path(p)) for p in found)
+    assert str(folders.scratch / OTHER / "scratchpad" / "mutate.py") in found
+    assert str(folders.scratch / OTHER / "tasks") in found
 
 
 def test_extra_paths_are_blocked_for_one_turn(repo, call):
@@ -198,6 +306,20 @@ def test_pattern_characters_in_a_path_are_escaped():
     assert claude.read_rule(Path("/a/b[1]*?"), folder=True) == (
         r"Read(//a/b\[1\]\*\?/**)"
     )
+
+
+def test_a_long_project_name_is_found_by_its_first_200_characters(
+    folders, tmp_path
+):
+    long = tmp_path / ("a" * 120) / ("b" * 120) / "repo"
+    name = claude.slug(long.resolve())
+    real = folders.projects / f"{name[:200]}-kqnxgc"
+    real.mkdir(parents=True)
+    logs, _ = claude.places(long, None)
+    assert logs == real
+    real.rename(folders.projects / "elsewhere")
+    logs, _ = claude.places(long, None)
+    assert logs == folders.projects / name[:200]
 
 
 def test_a_session_filed_under_another_project_name_is_found(repo, folders):
