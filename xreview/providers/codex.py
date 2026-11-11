@@ -5,21 +5,20 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 from pathlib import Path
 import shutil
-import signal
 import subprocess
 import sys
-import time
+from typing import Callable
 import uuid
+
+from .. import procs
 
 DISPLAY_NAME = "Codex"
 TIMEOUT_SECONDS = 40 * 60
 PROGRESS_SECONDS = 30
-STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+OnStart = Callable[[int, "str | None"], None] | None
 
 
 class ReviewerError(Exception):
@@ -27,10 +26,6 @@ class ReviewerError(Exception):
 
     The message is user-facing; diagnostics stay in the run folder.
     """
-
-
-class Stopped(Exception):
-    """The runner received a stop signal while Codex was running."""
 
 
 def version() -> str:
@@ -47,19 +42,30 @@ def version() -> str:
     return result.stdout.strip()
 
 
-def start(prompt: str, repo: Path, run_dir: Path) -> tuple[str, str]:
-    """Send prompt to a new read-only session; return (session_id, reply)."""
-    run(command(run_dir), prompt, repo, run_dir)
+def start(
+    prompt: str, repo: Path, run_dir: Path, on_start: OnStart = None
+) -> tuple[str, str]:
+    """Send prompt to a new read-only session; return (session_id, reply).
+
+    on_start gets Codex's process ID and start time as soon as it starts.
+    """
+    run(command(run_dir), prompt, repo, run_dir, on_start)
     return parse(run_dir)
 
 
-def resume(session_id: str, prompt: str, repo: Path, run_dir: Path) -> str:
+def resume(
+    session_id: str,
+    prompt: str,
+    repo: Path,
+    run_dir: Path,
+    on_start: OnStart = None,
+) -> str:
     """Send prompt to an existing session; return the reply.
 
     Codex works in the folder it's resumed from, so repo must be the repo
     root, as it was for start.
     """
-    run(command(run_dir, session_id), prompt, repo, run_dir)
+    run(command(run_dir, session_id), prompt, repo, run_dir, on_start)
     return parse(run_dir, session_id)[1]
 
 
@@ -80,87 +86,41 @@ def command(run_dir: Path, session_id: str | None = None) -> list[str]:
     return ["codex", *args]
 
 
-def run(argv: list[str], prompt: str, repo: Path, run_dir: Path) -> None:
+def run(
+    argv: list[str], prompt: str, repo: Path, run_dir: Path, on_start: OnStart
+) -> None:
+    """Run Codex in its own process group, prompt on stdin, output to files.
+
+    On a timeout or a stop signal, the whole group is killed (procs.run).
+    """
     if shutil.which("codex") is None:
         raise ReviewerError("Codex CLI not found on PATH.")
-    code = execute(argv, prompt, repo, run_dir)
+    try:
+        code = procs.run(
+            argv,
+            prompt,
+            repo,
+            run_dir,
+            timeout=TIMEOUT_SECONDS,
+            progress_every=PROGRESS_SECONDS,
+            progress=lambda elapsed: report_progress(run_dir, elapsed),
+            on_start=on_start,
+        )
+    except procs.Stopped as exc:
+        raise ReviewerError(
+            f"The runner was stopped ({exc}); Codex was killed."
+        ) from exc
+    except procs.TimedOut as exc:
+        raise ReviewerError(
+            f"Codex timed out after {TIMEOUT_SECONDS // 60} minutes and was "
+            "killed."
+        ) from exc
     if code != 0:
         stderr = (run_dir / "stderr.txt").read_text(errors="replace")
         tail = "\n".join(stderr.splitlines()[-20:])
         raise ReviewerError(
             f"Codex exited with code {code}. Last lines of stderr:\n{tail}"
         )
-
-
-def execute(argv: list[str], prompt: str, repo: Path, run_dir: Path) -> int:
-    """Run Codex in its own process group, prompt on stdin, output to files.
-
-    On a timeout or a stop signal (SIGTERM, SIGHUP, SIGINT), kill the whole
-    group, so no Codex turn keeps running after the runner gives up on it.
-    """
-    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
-    for sig in STOP_SIGNALS:
-        signal.signal(sig, stop)
-    try:
-        with (
-            (run_dir / "events.jsonl").open("wb") as out,
-            (run_dir / "stderr.txt").open("wb") as err,
-        ):
-            with subprocess.Popen(
-                argv,
-                cwd=repo,
-                stdin=subprocess.PIPE,
-                stdout=out,
-                stderr=err,
-                start_new_session=True,
-            ) as proc:
-                try:
-                    return wait_for(proc, prompt, run_dir)
-                except (subprocess.TimeoutExpired, Stopped) as exc:
-                    # A stop from Claude Code signals the whole process tree
-                    # at once, so Codex may already be dead. Not yet reaped,
-                    # macOS reports EPERM for its group; once reaped, ESRCH.
-                    with contextlib.suppress(
-                        PermissionError, ProcessLookupError
-                    ):
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    proc.wait()
-                    if isinstance(exc, Stopped):
-                        raise ReviewerError(
-                            f"The runner was stopped ({exc}); Codex was "
-                            "killed."
-                        ) from exc
-                    raise ReviewerError(
-                        f"Codex timed out after {TIMEOUT_SECONDS // 60} "
-                        "minutes and was killed."
-                    ) from exc
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-
-
-def stop(signum: int, frame) -> None:
-    raise Stopped(signal.Signals(signum).name)
-
-
-def wait_for(proc: subprocess.Popen, prompt: str, run_dir: Path) -> int:
-    """Send the prompt, then wait for Codex to exit.
-
-    Reports progress every PROGRESS_SECONDS, and raises TimeoutExpired once
-    TIMEOUT_SECONDS have passed.
-    """
-    began = time.monotonic()
-    data: bytes | None = prompt.encode("utf-8")
-    while True:
-        left = TIMEOUT_SECONDS - (time.monotonic() - began)
-        try:
-            proc.communicate(data, timeout=max(0, min(PROGRESS_SECONDS, left)))
-            return proc.returncode
-        except subprocess.TimeoutExpired:
-            if left <= PROGRESS_SECONDS:
-                raise
-        data = None  # communicate keeps sending what's left of the prompt
-        report_progress(run_dir, time.monotonic() - began)
 
 
 def report_progress(run_dir: Path, elapsed: float) -> None:
