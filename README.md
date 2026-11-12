@@ -18,7 +18,7 @@ In the session that wrote the code, **Session A**, commit your work and run `/xr
 
 Then the review stops for you, usually 20 to 30 minutes after it started, and Session A gives you the path to the report. You can ask either reviewer questions, ask for more rounds and give your decisions, all in Session A. When you finalize, Session B writes `decided-plan.md`, and `/xreview:code-implement <name>` implements it.
 
-Session A only carries messages. It never reads the debate, so its context stays small for implementing the fixes.
+Session A only carries messages. It never reads the debate or looks into your questions, so its context stays small for implementing the fixes.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ Session A only carries messages. It never reads the debate, so its context stays
 - **Codex CLI, logged in.** Codex's model and reasoning effort come from your own `~/.codex/config.toml`; `xreview` doesn't override them.
 - **Python 3.10 or later**, with nothing to install: the runner uses only the standard library. The launcher, `bin/xreview`, runs the first suitable Python it finds.
 - **git**. Reviews cover committed changes only.
-- **macOS or Linux including WSL**. Windows isn't supported.
+- **macOS or Linux including WSL**. Windows isn't supported. Only macOS has been tested end to end.
 
 ## Install
 
@@ -133,9 +133,9 @@ With a phone connected, Session A sends each report, long answer or Decided Plan
 
 Both reviewers can read all the code and run things to check their claims. Neither can change your repository.
 
-- **Session B** runs every turn inside Claude Code's sandbox, in Auto mode, with only the read, shell and web tools. Its shell commands can write only to temporary folders and have no network access; it looks things up with the web tools. It can't read this project's other Claude conversations, their scratch folders or the project's memory. Its own saved output stays readable. It runs in Claude Code's default output style, whatever yours is, so no Insight blocks reach Codex. If the sandbox can't start or Auto mode isn't available, `xreview` stops rather than run it unprotected.
-- **Codex** runs with its sandbox set to read-only and approvals set to never.
-- **Blind ranking.** Codex ranks first, so Session B's ranking doesn't exist yet. During Session B's ranking turn, the review's run folders, its transcript and Codex's home folder are blocked from it, and Codex's ranking isn't in its message. The block lasts that one turn.
+- **Session B** runs every turn inside Claude Code's sandbox, in Auto mode, with only the read, shell and web tools. Its shell commands can write only to temporary folders and have no network access; it looks things up with the web tools. It can't read other AI sessions' records, such as `~/.claude` and `~/.codex`, or your other reviews, unless the handoff or your messages name a file by its full path. It runs in Claude Code's default output style, whatever yours is, so no Insight blocks reach Codex. If the sandbox can't start or Auto mode isn't available, `xreview` stops rather than run it unprotected.
+- **Codex** runs with its sandbox set to read-only and approvals set to never. Its prompt asks it to stay out of the same records, but nothing enforces that.
+- **Blind ranking.** Codex ranks first, so Session B's ranking doesn't exist yet. During Session B's ranking turn, the review's run folders and transcript are blocked from it, and Codex's ranking isn't in its message. The block lasts that one turn.
 
 `xreview` has been checked against `codex-cli 0.160.1` and Claude Code 2.1.319. A later version of either could change how a resumed session behaves.
 
