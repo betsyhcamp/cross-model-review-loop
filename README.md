@@ -91,7 +91,7 @@ When you give your decisions, or say to finalize, Session B writes `.reviews/<na
 
 Run `/xreview:code-implement <name>` in Session A, or in a fresh session if Session A's context is long. It works only from `decided-plan.md`:
 
-- one commit per group, in order, staged by explicit path, with a subject line that follows your repository's convention and ends in `(xreview <name>, group <n>)`;
+- one commit per group, in order, staged by explicit path, with the group's title as the subject line, after any prefix your repository's convention uses, so each commit and its group share a label;
 - then your project's test command, with fixes for any failures in extra commits;
 - then a **Final Changes** section in the transcript: each commit, the test result, what was deferred or dropped, and any departures from the plan.
 
