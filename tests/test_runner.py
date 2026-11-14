@@ -1459,3 +1459,92 @@ def test_a_plan_with_neither_headings_nor_the_line_stops_after_a_fix_up(
     result = review.run("--no-decision-rounds", **env)
     assert result.returncode == 1
     assert claude_call(review, "fix-up-plan")
+
+
+# --- finishing an operation the developer moved on from ---------------------
+
+
+def answers_with(env: dict, **answers: str) -> dict:
+    """env with more fake Claude answers, by part of the run folder's
+    name."""
+    merged = {**json.loads(env["FAKE_CLAUDE_ANSWERS"]), **answers}
+    return {**env, "FAKE_CLAUDE_ANSWERS": json.dumps(merged)}
+
+
+def crash_then_move_on(review, env, kind, words, step, *flags):
+    """Run kind, killed right after the reviewer answered step, then ask
+    Claude something else. Returns that run and the reviewer calls the
+    move made."""
+    crashed = ask(
+        review,
+        kind,
+        1,
+        words,
+        *flags,
+        XREVIEW_TEST_CRASH=f"{step}:after",
+        **env,
+    )
+    assert crashed.returncode == 137, crashed.stderr
+    before = review.counts()
+    moved = ask(review, "ask-claude", 9, "Something else.", **env)
+    assert moved.returncode == 0, moved.stderr
+    claude_calls, codex_calls = review.counts()
+    # Only the new question is sent.
+    assert (claude_calls - before[0], codex_calls - before[1]) == (1, 0)
+    return moved
+
+
+def test_a_finished_finalize_is_recorded_when_you_move_on(stopped):
+    env = answers_with(stopped.decisions_env, finalize=plan_with(2))
+    moved = crash_then_move_on(
+        stopped, env, "finalize", "Defaults.", "finalize-1:claude"
+    )
+    assert "Finalize 1 finished after all" in moved.stderr
+    assert (stopped.path / "decided-plan.md").read_text() == plan_with(2)
+    assert "Decided Plan" in stopped.headings()
+
+
+def test_a_finished_plan_over_15_groups_is_held_when_you_move_on(stopped):
+    env = answers_with(stopped.decisions_env, finalize=plan_with(16))
+    moved = crash_then_move_on(
+        stopped, env, "finalize", "Defaults.", "finalize-1:claude"
+    )
+    assert "Finalize 1 finished after all" in moved.stderr
+    assert stopped.run_state()["held"]["groups"] == 16
+    assert not (stopped.path / "decided-plan.md").exists()
+
+
+def test_a_finished_merge_updates_the_report_when_you_move_on(stopped):
+    moved = crash_then_move_on(
+        stopped, stopped.decisions_env, "ask-codex", "Again?", "round-2:merge"
+    )
+    assert "Question 1 for Codex finished after all" in moved.stderr
+    report = (stopped.path / "report.md").read_text()
+    assert "_From decision round 2_" in report
+
+
+def test_a_finished_merge_with_bad_headings_is_dropped_unfixed(stopped):
+    env = answers_with(
+        stopped.decisions_env, **{"merge-r2": "@headings-but-last"}
+    )
+    moved = crash_then_move_on(
+        stopped, env, "ask-codex", "Again?", "round-2:merge"
+    )
+    assert "Question 1 for Codex was dropped" in moved.stderr
+    assert not any(
+        "fix-up-r2" in c["argv"][-1] for c in stopped.calls("claude")
+    )
+    assert (
+        "_From decision round 2_"
+        not in (stopped.path / "report.md").read_text()
+    )
+
+
+def test_a_ranking_round_with_only_its_copy_finished_is_dropped(review):
+    env = alone_env(review)
+    assert review.run("--no-decision-rounds", **env).returncode == 0
+    moved = crash_then_move_on(
+        review, env, "ask-codex", "Rank it.", "ask-codex-1:decision-copy"
+    )
+    assert "Question 1 for Codex was dropped" in moved.stderr
+    assert "finished after all" not in moved.stderr

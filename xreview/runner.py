@@ -119,6 +119,12 @@ def fenced(text: str) -> str:
     return f"{mark}\n{text.rstrip(chr(10))}\n{mark}"
 
 
+class NeedsCall(Exception):
+    """While a dropped operation is finished offline: a step has no
+    finished answer, so finishing the operation would need a reviewer
+    call."""
+
+
 class Lock:
     """One xreview command at a time on a review, so each reviewer has one
     writer. The lock file names its owner by process ID and start time; a
@@ -189,6 +195,8 @@ class Runner:
             model,
             effort,
         )  # --claude-model, --claude-effort
+        # Finishing a dropped operation: no new reviewer calls.
+        self.offline = False
         self.state = transcript.read_state(self.review)
         self.st = self.load()
 
@@ -381,7 +389,7 @@ class Runner:
         --retry-uncertain allows resending it. With neither, the step is
         uncertain and the run stops."""
         found = self.settle(rec, finished, who)
-        if found is not None or self.retry:
+        if found is not None or self.retry or self.offline:
             return found
         rec["status"] = UNCERTAIN
         self.save()
@@ -423,6 +431,8 @@ class Runner:
         )
         if found:
             return self.codex_accept(self.st["steps"][key], *found)
+        if self.offline:
+            raise NeedsCall(received)
         problems = cli.tree_problems(self.state)
         if problems:
             raise cli.CheckFailed("\n".join(problems))
@@ -507,6 +517,8 @@ class Runner:
         )
         if found is not None:
             return self.claude_accept(self.st["steps"][key], found)
+        if self.offline:
+            raise NeedsCall(label)
         problems = cli.tree_problems(self.state)
         if problems:
             raise cli.CheckFailed("\n".join(problems))
@@ -1022,42 +1034,29 @@ class Runner:
         return op
 
     def drop(self, op: dict, kind: str) -> None:
-        """Drop a pending operation for a new one. A reviewer still working
-        on it is waited for, and any answer it finished is recorded, but
-        nothing is resent. A question whose answer turns out to be
-        complete isn't dropped."""
+        """Drop a pending operation for a new one, unless its answers turn
+        out to be complete. Its handler runs again with reviewer calls
+        switched off: a reviewer still working is waited for and finished
+        answers are used, but nothing is sent. If every step it needs has
+        an answer, it finishes as usual; otherwise it's recorded as
+        dropped."""
         if op["kind"] == "run":
             raise cli.CheckFailed(
                 "The review hasn't reached its first stop yet. Run "
                 f"`xreview run {self.name}` to pick it up."
             )
-        steps = {
-            key: rec
-            for key, rec in self.st["steps"].items()
-            if key.startswith(tuple(op["prefixes"]))
-        }
-        for rec in steps.values():
-            if rec["status"] not in (LAUNCHED, UNCERTAIN):
-                continue
-            if rec["provider"] == "codex":
-                found = self.settle(rec, self.codex_finished, "Codex")
-                if found is not None:
-                    self.codex_accept(rec, *found)
-            else:
-                found = self.settle(
-                    rec,
-                    lambda d, s=rec["session"]: claude.finished(d, s),
-                    "Claude",
-                )
-                if found is not None:
-                    self.claude_accept(rec, found)
         label = self.label(op)
-        single = "round" not in op and len(steps) == 1
-        if single and all(rec["status"] == DONE for rec in steps.values()):
-            (rec,) = steps.values()
+        self.offline = True
+        try:
+            self.handler(op)(op)
+            finished = True
+        except (NeedsCall, cli.CheckFailed):
+            finished = False
+        finally:
+            self.offline = False
+        if finished:
             print(
-                f"xreview: {label} finished after all. Its answer is in "
-                f"{Path.cwd() / self.path(rec['out'])}",
+                f"xreview: {label} finished after all.",
                 file=sys.stderr,
                 flush=True,
             )
@@ -1077,14 +1076,16 @@ class Runner:
         self.st["op"] = None
         self.save()
 
-    def resume(self, op: dict) -> None:
-        handlers = {
+    def handler(self, op: dict):
+        return {
             "ask-claude": self.ask_claude,
             "ask-codex": self.ask_codex,
             "rank": self.rank,
             "finalize": self.finalize,
-        }
-        handlers[op["kind"]](op)
+        }[op["kind"]]
+
+    def resume(self, op: dict) -> None:
+        self.handler(op)(op)
         self.st["op"] = None
         self.save()
 
