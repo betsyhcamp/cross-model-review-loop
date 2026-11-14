@@ -191,6 +191,36 @@ def test_each_message_carries_what_its_step_needs(review):
     assert second["argv"][:3] == ["exec", "resume", SESSION]
 
 
+def test_session_b_gets_the_repos_own_instruction_files(repo):
+    repo.commit("CLAUDE.md", "Use tabs.\n```sh\nmake test\n```\n", "Add rules")
+    (repo.path / "docs").mkdir()
+    head = repo.commit("docs/AGENTS.md", "DOCS-RULES\n", "Add docs rules")
+    (repo.path / "CLAUDE.local.md").write_text("PRIVATE-NOTE\n")
+    review = Review(repo)
+    repo.write_prompt(
+        review.path, cli.simplification_block(), (repo.base, head)
+    )
+    result = review.run()
+    assert result.returncode == 0, result.stderr
+    rebuttal = review.calls("claude")[1]["prompt"]
+    template = (ROOT / "templates/runner/repo-instructions.md").read_text()
+    intro = template.split("{files}")[0].rstrip("\n")
+    shown = "`CLAUDE.md`:\n\n````\nUse tabs.\n```sh\nmake test\n```\n````"
+    assert intro + "\n\n" + shown + "\n\n" in rebuttal
+    assert rebuttal.index("Then do this step:") < rebuttal.index(intro)
+    state = json.loads((review.path / "state.json").read_text())
+    step3 = cli.fill(cli.read_template("code/step3-claude-rebuttal"), state)
+    step3 = step3.splitlines()[0]
+    assert rebuttal.index(shown) < rebuttal.index(step3)
+    assert "DOCS-RULES" not in rebuttal and "PRIVATE-NOTE" not in rebuttal
+
+
+def test_without_instruction_files_the_first_message_is_unchanged(review):
+    review.run()
+    rebuttal = review.calls("claude")[1]["prompt"]
+    assert "instruction files" not in rebuttal
+
+
 def test_run_at_a_stop_reports_it_and_sends_nothing(review):
     review.run()
     before = review.counts()

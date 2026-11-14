@@ -25,6 +25,7 @@
 ## What Session B loads
 
 - **None of your settings files.** Session B starts with `--setting-sources=`, so it doesn't load `~/.claude/settings.json`, a project's `.claude/settings.json` or `.claude/settings.local.json`, or any `CLAUDE.md`. Those could widen its sandbox.
+- **The repository's own instructions, in its first message.** The runner includes the tracked `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` at the repository root, under a note that xreview's instructions come first. Untracked files, such as `CLAUDE.local.md`, aren't included. Your personal rules reach Session B through the handoff Session A writes.
 - **Managed settings still apply.** The setup check stops with exit 3 if a managed settings file sets `sandbox.excludedCommands` or `sandbox.filesystem.disabled`. Exclusions set by MDM profiles or server-managed settings aren't files `xreview` can read, so they're a known limit.
 
 ## Commands

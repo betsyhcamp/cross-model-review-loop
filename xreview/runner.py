@@ -55,6 +55,9 @@ OPERATIONS = {
 }
 GROUP_LIMIT = 15  # more groups than this is held for the developer (D15)
 DECIDED_PLAN = "Decided Plan"
+# The repo's own instruction files that go to Session B, which loads no
+# CLAUDE.md itself, when they're tracked at the repo root.
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md")
 
 
 def crash(point: str) -> None:
@@ -96,6 +99,13 @@ def groups(plan: str) -> int:
 def join(*parts: str) -> str:
     """Parts one blank line apart, as cli.compose joins a message."""
     return "\n\n".join(part.rstrip("\n") for part in parts) + "\n"
+
+
+def fenced(text: str) -> str:
+    """text in a backtick fence longer than any run of backticks in it."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    mark = "`" * max(3, longest + 1)
+    return f"{mark}\n{text.rstrip(chr(10))}\n{mark}"
 
 
 class Lock:
@@ -207,6 +217,24 @@ class Runner:
                 if len(path.parts) > 2 and path.exists() and path not in found:
                     found.append(path)
         return found
+
+    def repo_instructions(self) -> list[str]:
+        """The repo's tracked instruction files at its root, each path and
+        full text, under the template that puts xreview's instructions
+        first; nothing if it has none. Untracked files, such as
+        CLAUDE.local.md, are never included."""
+        tracked = cli.git_out("ls-files", "--", *INSTRUCTION_FILES).split()
+        files = [
+            f"`{name}`:\n\n"
+            + fenced(Path(name).read_text(encoding="utf-8", errors="replace"))
+            for name in INSTRUCTION_FILES
+            if name in tracked
+        ]
+        if not files:
+            return []
+        return [
+            self.template("runner/repo-instructions", files="\n\n".join(files))
+        ]
 
     def resent(self, prompt: str) -> str:
         return join(self.template("runner/resend-note"), prompt)
@@ -562,6 +590,7 @@ class Runner:
             join(
                 self.template("runner/session-b-header"),
                 self.template("runner/first-turn"),
+                *self.repo_instructions(),
                 self.template("code/step3-claude-rebuttal"),
                 feedback,
             ),
