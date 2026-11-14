@@ -318,12 +318,10 @@ class Runner:
         return self.review / relative
 
     def new_step(self, key: str, run_dir: Path, **fields) -> dict:
-        previous = self.st["steps"].get(key)
         rec = {
             "key": key,
             "status": LAUNCHED,
             "run": str(run_dir.relative_to(self.review)),
-            "attempt": previous["attempt"] + 1 if previous else 1,
             "began": time.time(),
             "pid": None,
             "started": None,
@@ -448,7 +446,6 @@ class Runner:
             run_dir,
             provider="codex",
             label=received,
-            received=received,
             out=str((run_dir / "response.md").relative_to(self.review)),
         )
         transcript.append(
@@ -483,12 +480,12 @@ class Runner:
         took = cli.duration(time.time() - rec["began"])
         transcript.append_once(
             self.review,
-            rec["received"],
+            rec["label"],
             reply,
             f"{transcript.now()} · run {run_dir.name[:2]} · {took}",
         )
         self.finish(rec)
-        self.done(rec["received"], took, run_dir)
+        self.done(rec["label"], took, run_dir)
         return reply
 
     # --- Claude steps --------------------------------------------------------
@@ -1235,12 +1232,12 @@ class Runner:
             join(self.template("runner/new-decision", next=str(start)), words),
             f"messages/06-decisions-r{n}.md",
         )
-        if not op.get("registered"):
+        if "source" not in op:
             text, source = self.checked(
                 key, text, [], f"fix-up new decision r{n}", label, start=start
             )
             self.register(text, source)
-            op["registered"], op["source"] = True, source
+            op["source"] = source
             self.save()
         text = self.path(op["source"]).read_text(encoding="utf-8")
         numbers = [k for k, _ in decisions.headings(text)]
