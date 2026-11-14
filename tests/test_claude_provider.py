@@ -683,3 +683,19 @@ def test_a_named_file_in_another_review_stays_readable(repo, folders, call):
     found = denied(repo)
     assert not any(named.resolve().is_relative_to(Path(p)) for p in found)
     assert str((earlier / "transcript.md").resolve()) in found
+
+
+def test_the_settings_file_is_compact(run_dir, call):
+    call()
+    text = (run_dir / "settings.json").read_text()
+    assert "\n " not in text
+    assert json.loads(text)["outputStyle"] == "default"
+
+
+def test_a_settings_file_over_claude_codes_limit_stops_the_call(
+    repo, call, monkeypatch
+):
+    monkeypatch.setattr(claude, "SETTINGS_LIMIT", 100)
+    with pytest.raises(claude.CallFailed, match="over Claude Code's"):
+        call()
+    assert not (repo.tmp / "claude-calls.jsonl").exists()

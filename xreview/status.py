@@ -147,20 +147,16 @@ def reopen(job: runner.Runner) -> list[str]:
     if job.st.get("claude_started") and session:
         runs = job.session_b()
         settings = Path.cwd() / job.review / "session-b-settings.json"
-        settings.write_text(
-            json.dumps(
-                claude.settings(
-                    Path.cwd(),
-                    session,
-                    [],
-                    job.review.resolve(),
-                    job.shared_paths(),
-                    runs["choices"],
-                ),
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+        claude.write_settings(
+            settings,
+            claude.settings(
+                Path.cwd(),
+                session,
+                [],
+                job.review.resolve(),
+                job.shared_paths(),
+                runs["choices"],
+            ),
         )
         commands.append(
             "  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --resume "

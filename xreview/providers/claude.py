@@ -90,6 +90,9 @@ MANAGED_DIR = Path(
 # every model. /effort saves levels per model, under modelSettings.
 CHOICES = ("model", "modelSettings")
 
+# Claude Code's documented limit for a --settings file.
+SETTINGS_LIMIT = 2 * 1024 * 1024
+
 CallFailed = procs.CallFailed
 CallUncertain = procs.CallUncertain
 OnStart = Callable[[int, "str | None"], None] | None
@@ -403,6 +406,23 @@ def settings(
     }
 
 
+def write_settings(path: Path, data: dict) -> None:
+    """Write Session B's settings file without indentation, refusing one
+    over Claude Code's limit before Claude starts. Its read blocks grow
+    with the developer's Claude Code history."""
+    text = json.dumps(data) + "\n"
+    size = len(text.encode("utf-8"))
+    if size > SETTINGS_LIMIT:
+        raise CallFailed(
+            f"Session B's settings file would be {size / 2**20:.1f} MiB, over "
+            f"Claude Code's {SETTINGS_LIMIT // 2**20} MiB limit, so xreview "
+            "didn't start Claude. It lists every path Session B mustn't "
+            "read, and that list grows with your Claude Code history: each "
+            "conversation, scratch folder and saved output Claude Code keeps."
+        )
+    path.write_text(text, encoding="utf-8")
+
+
 def command(
     claude: str,
     settings_file: Path,
@@ -502,12 +522,8 @@ def turn(
     claude = binary()
     extra = list(extra_blocked or [])
     settings_file = run_dir / "settings.json"
-    settings_file.write_text(
-        json.dumps(
-            settings(repo, session, extra, review, shared, choices), indent=2
-        )
-        + "\n",
-        encoding="utf-8",
+    write_settings(
+        settings_file, settings(repo, session, extra, review, shared, choices)
     )
     execute(
         command(claude, settings_file, session, first, model, effort),
@@ -574,10 +590,7 @@ def preflight(
             "that can change."
         )
     settings_file = run_dir / "settings.json"
-    settings_file.write_text(
-        json.dumps(settings(repo, None, [], choices=choices), indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_settings(settings_file, settings(repo, None, [], choices=choices))
     probe = run_dir / "probe"
     prompt = (
         "Run exactly these two commands with the Bash tool, one at a time: "
