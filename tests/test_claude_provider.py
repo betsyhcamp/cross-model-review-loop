@@ -652,3 +652,34 @@ def test_a_linked_worktrees_git_folders_are_write_denied(repo, folders):
         str(main_git / "worktrees" / "wt"),
         str(main_git),
     ]
+
+
+def read_rules(repo) -> list[str]:
+    return last_call(repo)["settings"]["permissions"]["deny"]
+
+
+def test_a_named_conversation_log_stays_readable(repo, folders, call):
+    named = folders.logs / f"{OTHER}.jsonl"
+    call(shared=(named,))
+    rules = read_rules(repo)
+    assert f"Read(/{folders.projects}/*/*.jsonl)" not in rules
+    assert claude.read_rule(named, folder=False) not in rules
+    assert f"Read(/{folders.logs}/*.jsonl)" not in rules
+    assert str(named) not in denied(repo)
+    assert claude.read_rule(folders.logs / f"{SESSION}.jsonl", False) in rules
+    other = folders.projects / "-another-project"
+    assert f"Read(/{other}/*.jsonl)" in rules
+
+
+def test_a_named_file_in_another_review_stays_readable(repo, folders, call):
+    reviews = repo.path / ".reviews"
+    (reviews / "this").mkdir(parents=True)
+    earlier = reviews / "earlier"
+    (earlier / "messages").mkdir(parents=True)
+    named = earlier / "messages" / "notes.md"
+    named.write_text("x\n")
+    (earlier / "transcript.md").write_text("x\n")
+    call(review=reviews / "this", shared=(named,))
+    found = denied(repo)
+    assert not any(named.resolve().is_relative_to(Path(p)) for p in found)
+    assert str((earlier / "transcript.md").resolve()) in found

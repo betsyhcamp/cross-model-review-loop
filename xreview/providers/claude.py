@@ -264,7 +264,11 @@ def blocked(
     if review is not None and review.parent.is_dir():
         here = review.resolve()
         for entry in sorted(here.parent.iterdir()):
-            if entry.is_dir() and entry != here:
+            if not entry.is_dir() or entry == here:
+                continue
+            if any(k.is_relative_to(entry) for k in keep):
+                found += around(entry, keep)
+            else:
                 found.append(entry)
     return found
 
@@ -277,6 +281,31 @@ def escape(path: Path) -> str:
 
 def read_rule(path: Path, folder: bool) -> str:
     return f"Read({escape(path)}{'/**' if folder else ''})"
+
+
+def log_rules(projects: Path, shared: list[Path] | tuple) -> list[str]:
+    """Read rules for every project's conversation logs. A pattern also
+    covers a log created after the folders were listed. Deny rules can't
+    have exceptions, so in the folder of a log the developer named, the
+    other logs are listed one by one instead."""
+    named = [
+        path
+        for path in (Path(p).resolve() for p in shared)
+        if path.suffix == ".jsonl" and path.parent.parent == projects
+    ]
+    if not named:
+        return [f"Read({escape(projects)}/*/*.jsonl)"]
+    rules = []
+    for folder in sorted(p for p in projects.iterdir() if p.is_dir()):
+        if any(path.parent == folder for path in named):
+            rules += [
+                read_rule(log, folder=False)
+                for log in sorted(folder.glob("*.jsonl"))
+                if log not in named
+            ]
+        else:
+            rules.append(f"Read({escape(folder)}/*.jsonl)")
+    return rules
 
 
 def user_temp() -> list[str]:
@@ -346,10 +375,7 @@ def settings(
     go to Codex with Claude's replies. choices are the developer's model
     choices copied for the review; only the keys in CHOICES are used."""
     denied = [*blocked(repo, session, review, shared), *extra]
-    # The pattern also covers a conversation log created after the folders
-    # were listed.
-    projects = config_dir().resolve() / "projects"
-    rules = [f"Read({escape(projects)}/*/*.jsonl)"]
+    rules = log_rules(config_dir().resolve() / "projects", shared)
     for path in denied:
         rules.append(read_rule(path, folder=not path.is_file()))
     return {
