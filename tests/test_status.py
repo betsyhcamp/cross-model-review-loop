@@ -66,7 +66,8 @@ def test_at_a_stop_it_shows_decisions_refusals_and_how_to_open_each(repo):
     assert lines[-2] == (
         f"  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --resume {session} "
         f"--settings '{settings}' --tools {claude.TOOLS} --allowedTools "
-        f"{claude.ALLOWED_TOOLS} --permission-mode auto --strict-mcp-config"
+        f"{claude.ALLOWED_TOOLS} --permission-mode auto --strict-mcp-config "
+        "--setting-sources="
     )
     assert lines[-1] == f"  codex resume {SESSION} -s read-only"
     sandbox = json.loads(settings.read_text())["sandbox"]

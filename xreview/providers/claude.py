@@ -3,7 +3,11 @@ that runs `claude`.
 
 Every turn runs in Claude Code's sandbox with Auto permission mode. The
 repo is write-denied, shell commands can't escape the sandbox, and only the
-read, shell and web tools exist. Each turn also blocks reads of other
+read, shell and web tools exist. Session B loads none of the developer's
+settings files, because those can widen the sandbox (excluded commands, or
+filesystem isolation switched off); managed settings still apply, so the
+setup check stops when a managed file on disk widens it. Each turn also
+blocks reads of other
 agents' records: other Claude Code sessions' conversations, saved output,
 subagent logs, scratch folders and memory, the developer's Claude Code
 history, and Codex's home folder (see blocked()). A turn can block more
@@ -61,6 +65,15 @@ SETUP = (
     "with the `claude` command. Install the Claude Code CLI so `claude` is "
     "on your PATH, then run `claude` once in a terminal to sign in. The VS "
     "Code extension doesn't put `claude` on your PATH by itself."
+)
+
+# Where Claude Code reads managed settings files: managed-settings.json,
+# then managed-settings.d/*.json in alphabetical order (Claude Code
+# 2.1.319). MDM profiles and server-managed settings aren't files here.
+MANAGED_DIR = Path(
+    "/Library/Application Support/ClaudeCode"
+    if sys.platform == "darwin"
+    else "/etc/claude-code"
 )
 
 CallFailed = procs.CallFailed
@@ -297,6 +310,7 @@ def settings(
             "failIfUnavailable": True,
             "allowUnsandboxedCommands": False,
             "filesystem": {
+                "disabled": False,
                 "allowWrite": user_temp(),
                 "denyWrite": [str(repo)],
                 "denyRead": [str(path) for path in denied],
@@ -329,9 +343,37 @@ def command(
         "--permission-mode",
         "auto",
         "--strict-mcp-config",
+        "--setting-sources=",
         "--settings",
         str(settings_file),
     ]
+
+
+def managed_problems() -> list[str]:
+    """The keys in managed settings files on disk that widen Session B's
+    sandbox: excluded commands, or filesystem isolation switched off.
+    Managed settings outrank Session B's own, so xreview can't undo them."""
+    files = [MANAGED_DIR / "managed-settings.json"]
+    drop_ins = MANAGED_DIR / "managed-settings.d"
+    if drop_ins.is_dir():
+        files += sorted(
+            p for p in drop_ins.glob("*.json") if not p.name.startswith(".")
+        )
+    found = []
+    for path in files:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        sandbox = data.get("sandbox") if isinstance(data, dict) else None
+        if not isinstance(sandbox, dict):
+            continue
+        if sandbox.get("excludedCommands"):
+            found.append(f"`sandbox.excludedCommands` in {path}")
+        filesystem = sandbox.get("filesystem")
+        if isinstance(filesystem, dict) and filesystem.get("disabled") is True:
+            found.append(f"`sandbox.filesystem.disabled` in {path}")
+    return found
 
 
 def environment() -> dict[str, str]:
@@ -415,6 +457,15 @@ def preflight(repo: Path, run_dir: Path) -> None:
     fails. And when Auto isn't available, it reports Auto at startup, then
     switches to another mode."""
     claude = binary()
+    widened = managed_problems()
+    if widened:
+        raise CallFailed(
+            "Your organization's managed settings widen the sandbox the "
+            "review's Claude session runs in, so xreview won't start the "
+            f"review: {'; '.join(widened)}. Managed settings outrank "
+            "xreview's own, so ask whoever manages this machine whether "
+            "that can change."
+        )
     settings_file = run_dir / "settings.json"
     settings_file.write_text(
         json.dumps(settings(repo, None, []), indent=2) + "\n",

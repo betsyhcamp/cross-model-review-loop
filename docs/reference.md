@@ -22,6 +22,11 @@
 - `runs/` keeps each call's raw output for diagnosing failures. A Session B call's folder also holds the `settings.json` it ran with. The transcript holds only each reviewer's final answer to each message.
 - `run.lock` exists while an `xreview` command is working on the review.
 
+## What Session B loads
+
+- **None of your settings files.** Session B starts with `--setting-sources=`, so it doesn't load `~/.claude/settings.json`, a project's `.claude/settings.json` or `.claude/settings.local.json`, or any `CLAUDE.md`. Those could widen its sandbox.
+- **Managed settings still apply.** The setup check stops with exit 3 if a managed settings file sets `sandbox.excludedCommands` or `sandbox.filesystem.disabled`. Exclusions set by MDM profiles or server-managed settings aren't files `xreview` can read, so they're a known limit.
+
 ## Commands
 
 Session A runs these for you. Each one except `status` takes `--retry-uncertain`, which sends again a call that may have run.

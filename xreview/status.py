@@ -159,7 +159,7 @@ def reopen(job: runner.Runner) -> list[str]:
             "  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --resume "
             f"{session} --settings {shlex.quote(str(settings))} --tools "
             f"{claude.TOOLS} --allowedTools {claude.ALLOWED_TOOLS} "
-            "--permission-mode auto --strict-mcp-config"
+            "--permission-mode auto --strict-mcp-config --setting-sources="
         )
     thread = job.state.get("reviewer_session_id")
     if thread:

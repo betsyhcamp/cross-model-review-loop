@@ -30,6 +30,7 @@ SESSION_B_FLAGS = [
     "--permission-mode",
     "auto",
     "--strict-mcp-config",
+    "--setting-sources=",
     "--settings",
 ]
 
@@ -173,7 +174,14 @@ def test_the_sandbox_is_forced_and_the_repo_is_write_denied(repo, call):
     assert sandbox["enabled"] is True
     assert sandbox["failIfUnavailable"] is True
     assert sandbox["allowUnsandboxedCommands"] is False
+    assert sandbox["filesystem"]["disabled"] is False
     assert sandbox["filesystem"]["denyWrite"] == [str(repo.path)]
+
+
+def test_the_developers_settings_files_arent_loaded(repo, call):
+    """They can widen the sandbox; managed settings still apply."""
+    call()
+    assert "--setting-sources=" in last_call(repo)["argv"]
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS's temp folder")
@@ -512,7 +520,16 @@ def test_progress_lines_show_only_time_and_tool_calls(
 
 
 @pytest.fixture
-def preflight(repo, run_dir, folders, monkeypatch):
+def managed(repo, monkeypatch) -> Path:
+    """An empty stand-in for the system's managed settings folder."""
+    path = repo.tmp / "managed"
+    path.mkdir()
+    monkeypatch.setattr(claude, "MANAGED_DIR", path)
+    return path
+
+
+@pytest.fixture
+def preflight(repo, run_dir, folders, managed, monkeypatch):
     def run(case: str = "ok"):
         monkeypatch.setenv("PATH", repo.env["PATH"])
         monkeypatch.setenv("FAKE_CLAUDE_CASE", case)
@@ -550,3 +567,45 @@ def test_the_setup_check_stops_without_auto_or_a_working_sandbox(
 ):
     with pytest.raises(claude.CallFailed, match=message):
         preflight(case)
+
+
+@pytest.mark.parametrize(
+    "file, data, key",
+    [
+        (
+            "managed-settings.json",
+            {"sandbox": {"excludedCommands": ["git *"]}},
+            "sandbox.excludedCommands",
+        ),
+        (
+            "managed-settings.d/20-security.json",
+            {"sandbox": {"filesystem": {"disabled": True}}},
+            "sandbox.filesystem.disabled",
+        ),
+    ],
+)
+def test_the_setup_check_stops_when_managed_settings_widen_the_sandbox(
+    repo, managed, preflight, file, data, key
+):
+    path = managed / file
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(data))
+    with pytest.raises(claude.CallFailed) as caught:
+        preflight()
+    assert f"`{key}` in {path}" in str(caught.value)
+    assert "ask whoever manages this machine" in str(caught.value)
+    assert not (repo.tmp / "claude-calls.jsonl").exists()
+
+
+def test_managed_settings_that_dont_widen_the_sandbox_are_fine(
+    managed, preflight
+):
+    (managed / "managed-settings.json").write_text(
+        json.dumps({"sandbox": {"excludedCommands": [], "enabled": True}})
+    )
+    (managed / "managed-settings.d").mkdir()
+    (managed / "managed-settings.d" / ".hidden.json").write_text(
+        json.dumps({"sandbox": {"excludedCommands": ["git *"]}})
+    )
+    (managed / "managed-settings.d" / "broken.json").write_text("{not json")
+    preflight()
