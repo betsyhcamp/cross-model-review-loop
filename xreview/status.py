@@ -116,7 +116,10 @@ def lines_for(job: runner.Runner) -> list[str]:
         lines.append("A Decided Plan is recorded.")
     if st.get("session_b"):
         lines.append(f"Session B runs on {runner.runs_with(st['session_b'])}.")
-    lines.append(refusals(review, steps))
+    # The setup check's refused write is the check passing, not a refusal.
+    lines.append(
+        refusals(review, [r for r in steps if r["key"] != "run:setup-check"])
+    )
     if not working and st["stopped"] and not st["op"]:
         lines += reopen(job)
     return lines

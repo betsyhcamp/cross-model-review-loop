@@ -283,6 +283,16 @@ def test_a_different_model_once_session_b_started_is_refused(review):
     assert same.returncode == 0, same.stderr
 
 
+@pytest.mark.parametrize("case", ["write_allowed", "write_refused_by_rule"])
+def test_a_sandbox_that_doesnt_refuse_a_repo_write_stops_the_review(
+    review, case
+):
+    result = review.run(FAKE_CLAUDE_CASES=json.dumps({"setup-check": case}))
+    assert result.returncode == 3, result.stderr
+    assert review.calls("codex") == []
+    assert not list(review.path.glob("runs/*/probe"))
+
+
 def test_run_at_a_stop_reports_it_and_sends_nothing(review):
     review.run()
     before = review.counts()

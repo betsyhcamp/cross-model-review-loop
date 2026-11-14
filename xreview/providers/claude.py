@@ -20,6 +20,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,12 @@ REFUSAL = re.compile(
     r"denied by your permission settings|has been denied|auto mode "
     r"classifier|operation not permitted|<sandbox_violations>|sandbox_apply",
     re.IGNORECASE,
+)
+# How the operating system refuses a write the sandbox blocks: macOS, then
+# Linux. Unlike REFUSAL, this can't come from Auto's classifier or a rule,
+# so it shows the sandbox's filesystem layer is on.
+OS_DENIAL = re.compile(
+    r"operation not permitted|read-only file system", re.IGNORECASE
 )
 SETUP = (
     "Claude Code CLI not found. xreview runs the review's Claude session "
@@ -520,9 +527,12 @@ def preflight(
         json.dumps(settings(repo, None, [], choices=choices), indent=2) + "\n",
         encoding="utf-8",
     )
+    probe = run_dir / "probe"
     prompt = (
-        f"Run exactly this command with the Bash tool: echo {PREFLIGHT_MARK}"
-        "\nThen reply with only what it printed."
+        "Run exactly these two commands with the Bash tool, one at a time: "
+        f"`echo {PREFLIGHT_MARK}`, then `touch {shlex.quote(str(probe))}`. "
+        "If a command fails, don't retry it or try another way. Then reply "
+        "with only what the first one printed."
     )
     execute(
         command(claude, settings_file, None, False, model, effort),
@@ -557,12 +567,39 @@ def preflight(
             "commands of the session you're in, the review's sandbox can't "
             "start inside it."
         )
+    write_refused(events, probe)
     reported = [
         e.get("model")
         for e in events
         if e.get("type") == "system" and e.get("subtype") == "init"
     ]
     return reported[0] if reported and reported[0] else None
+
+
+def write_refused(events: list[dict], probe: Path) -> None:
+    """Show that the setup check's write into the repo was refused by the
+    sandbox: no file afterwards, and an operating-system denial. A refusal
+    by Auto's classifier or a rule doesn't show the sandbox is on."""
+    if probe.exists():
+        probe.unlink()
+        raise CallFailed(
+            "Claude Code's sandbox let a shell command write to the repo, so "
+            "xreview won't start the review. Check your Claude Code sandbox "
+            "settings."
+        )
+    uses = {b.get("id"): b for b in blocks(events, "tool_use", "assistant")}
+
+    def command_of(result: dict) -> str:
+        given = uses.get(result["id"], {}).get("input")
+        return str(given.get("command", "")) if isinstance(given, dict) else ""
+
+    touched = [r for r in tool_results(events) if "touch" in command_of(r)]
+    if not any(OS_DENIAL.search(r["text"]) for r in touched):
+        detail = touched[0]["text"][:300] if touched else "no write was tried"
+        raise CallFailed(
+            "xreview couldn't confirm that Claude Code's sandbox blocks "
+            f"writes to the repo, so it won't start the review: {detail}"
+        )
 
 
 # --- reading a turn's output -------------------------------------------------

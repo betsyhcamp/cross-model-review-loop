@@ -10,10 +10,13 @@ a second's wait) | refused_tools (two refused tool calls and a failed one).
 
 The answer is FAKE_CLAUDE_TEXT if set, else "FAKE-CLAUDE-ANSWER". A
 preflight prompt (it names the sandbox mark) gets a Bash call that prints
-the mark. Per step, FAKE_CLAUDE_CASES and FAKE_CLAUDE_ANSWERS are JSON
-objects mapping part of the run folder's name (its settings file is in the
-folder) to a case or an answer, and FAKE_CLAUDE_SLEEPS to seconds to wait
-before answering, so a test can kill the runner while Claude works.
+the mark, then the `touch` it asks for, refused by the operating system;
+case write_allowed creates the file instead, and write_refused_by_rule
+has a rule refuse it. Per step, FAKE_CLAUDE_CASES and FAKE_CLAUDE_ANSWERS
+are JSON objects mapping part of the run folder's name (its settings file
+is in the folder) to a case or an answer, and FAKE_CLAUDE_SLEEPS to
+seconds to wait before answering, so a test can kill the runner while
+Claude works.
 
 An answer of "@headings" echoes every `### Decision <n>: <title>` line in
 the prompt, each with a body, as a merge or a fixed reply would;
@@ -36,6 +39,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import sys
 import time
 import uuid
@@ -238,6 +242,21 @@ if MARK in prompt:
     else:
         tool_round("toolu_1", "Bash", {"command": f"echo {MARK}"}, f"{MARK}\n")
         answer = MARK
+        found = re.search(r"`(touch [^`]+)`", prompt)
+        if found:
+            probe = Path(shlex.split(found.group(1))[1])
+            if case == "write_allowed":
+                probe.write_text("")
+                text, error = "", False
+            elif case == "write_refused_by_rule":
+                text = "Permission to use Bash has been denied by your rules."
+                error = True
+            else:
+                text = f"touch: {probe}: Operation not permitted"
+                error = True
+            tool_round(
+                "toolu_2", "Bash", {"command": found.group(1)}, text, error
+            )
 elif case == "refused_tools":
     tool_round(
         "toolu_1",

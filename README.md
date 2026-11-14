@@ -24,7 +24,7 @@ Session A only carries messages. It never reads the debate or looks into your qu
 
 - **Claude Code, logged in**, in the terminal or the VS Code extension.
 - **The `claude` command on your PATH.** `xreview` runs Session B with it. The VS Code extension doesn't put `claude` on your PATH by itself, so install the Claude Code CLI too. If it's missing but you're in a Claude Code session, `xreview` uses that session's own binary and tells you so.
-- **Claude Code's sandbox and Auto mode.** Session B runs only inside the sandbox, in Auto mode. `xreview` checks both before Codex's review starts, and stops with instructions if either is missing. On Linux, the sandbox needs `bubblewrap` and `socat`.
+- **Claude Code's sandbox and Auto mode.** Session B runs only inside the sandbox, in Auto mode. `xreview` checks both before Codex's review starts, including that the sandbox refuses a write to the repo, and stops with instructions if either is missing. On Linux, the sandbox needs `bubblewrap` and `socat`.
 - **Codex CLI, logged in.** Codex's model and reasoning effort come from your own `~/.codex/config.toml`; `xreview` doesn't override them.
 - **Python 3.10 or later**, with nothing to install: the runner uses only the standard library. The launcher, `bin/xreview`, runs the first suitable Python it finds.
 - **git**. Reviews cover committed changes only.

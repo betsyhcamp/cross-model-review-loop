@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -609,3 +610,31 @@ def test_managed_settings_that_dont_widen_the_sandbox_are_fine(
     )
     (managed / "managed-settings.d" / "broken.json").write_text("{not json")
     preflight()
+
+
+def test_the_setup_check_tries_a_write_into_its_own_run_folder(
+    repo, run_dir, preflight
+):
+    preflight()
+    prompt = last_call(repo)["prompt"]
+    assert f"`touch {shlex.quote(str(run_dir / 'probe'))}`" in prompt
+    assert "don't retry it or try another way" in prompt
+    assert not (run_dir / "probe").exists()
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("write_allowed", "let a shell command write to the repo"),
+        (
+            "write_refused_by_rule",
+            "couldn't confirm that Claude Code's sandbox",
+        ),
+    ],
+)
+def test_the_setup_check_stops_unless_the_os_refuses_the_write(
+    run_dir, preflight, case, message
+):
+    with pytest.raises(claude.CallFailed, match=message):
+        preflight(case)
+    assert not (run_dir / "probe").exists()
