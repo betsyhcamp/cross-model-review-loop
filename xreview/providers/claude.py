@@ -613,9 +613,10 @@ def preflight(
         raise CallFailed(
             "Claude Code's Auto mode isn't available here (it ran in "
             f"{mode!r} mode). xreview runs the review's Claude session only "
-            "in Auto mode, inside Claude Code's sandbox. Check that your "
-            "plan and settings allow Auto mode (`disableAutoMode` turns it "
-            "off), then run again."
+            "in Auto mode, inside Claude Code's sandbox. Session B doesn't "
+            "load your settings files, so check that your plan allows Auto "
+            "mode, and that your organization's managed settings, if any, "
+            "don't switch it off with `disableAutoMode`. Then run again."
         )
     results = tool_results(events)
     ran = [
