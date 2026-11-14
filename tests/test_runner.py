@@ -1361,3 +1361,101 @@ def test_other_reviews_are_blocked_but_this_one_isnt(repo, review):
     for call in review.calls("claude")[1:]:
         assert not readable(call, earlier / "transcript.md")
         assert readable(call, review.path / "claude-handoff.md")
+
+
+# --- decision lists with missing or malformed headings ----------------------
+
+
+def titles_of(review) -> dict[str, str]:
+    return {k: v["title"] for k, v in review.run_state()["decisions"].items()}
+
+
+def test_a_decision_copy_without_proper_headings_gets_one_fix_up(review):
+    env = with_decisions(
+        review,
+        **{
+            "decision-copy": "## Decision 1: A\nx\n\n## Decision 2: B\ny\n",
+            "fix-up-decision": "### Decision 1: A\nx\n\n### Decision 2: B\ny",
+        },
+    )
+    result = review.run(**env)
+    assert result.returncode == 0, result.stderr
+    fix = claude_call(review, "fix-up-decision")
+    assert "It has no `### Decision <n>: <title>` heading." in fix["prompt"]
+    assert (
+        "`### Decision 1: <title>`, `### Decision 2: <title>` and so on"
+        in fix["prompt"]
+    )
+    assert titles_of(review) == {"1": "A", "2": "B"}
+    assert claude_call(review, "ranking-r1")
+
+
+def test_new_decisions_numbered_out_of_sequence_stop_after_one_fix_up(
+    stopped,
+):
+    bad = "### Decision 3: A\nx\n\n### Decision 5: B\ny"
+    env = with_decisions(
+        stopped, **{"new-decision": bad, "fix-up-new-decision": bad}
+    )
+    result = ask(stopped, "rank", 1, "Two new ones.", **env)
+    assert result.returncode == 1
+    assert "still doesn't have one `### Decision` heading" in result.stderr
+    assert titles_of(stopped) == {"1": "First", "2": "Second"}
+
+
+def test_new_decisions_without_headings_are_fixed_to_the_next_numbers(
+    stopped,
+):
+    env = with_decisions(
+        stopped,
+        **{
+            "new-decision": "Two new decisions: naming, and a timeout.",
+            "fix-up-new-decision": "### Decision 3: Naming\nx\n\n"
+            "### Decision 4: Timeout\ny",
+        },
+    )
+    result = ask(stopped, "rank", 1, "Two new ones.", **env)
+    assert result.returncode == 0, result.stderr
+    fix = claude_call(stopped, "fix-up-new-decision")
+    assert (
+        "`### Decision 3: <title>`, `### Decision 4: <title>`"
+        in (fix["prompt"])
+    )
+    assert titles_of(stopped) == {
+        "1": "First",
+        "2": "Second",
+        "3": "Naming",
+        "4": "Timeout",
+    }
+
+
+def test_a_part_4_in_prose_gets_one_fix_up(review):
+    prose = PLAN_ALONE.replace("### Decision", "Decision")
+    env = alone_env(review, plan=prose, **{"fix-up-plan": PLAN_ALONE})
+    result = review.run("--no-decision-rounds", **env)
+    assert result.returncode == 0, result.stderr
+    assert claude_call(review, "fix-up-plan")
+    assert titles_of(review) == {"1": "First", "2": "Second"}
+
+
+def test_a_plan_that_says_it_has_no_decisions_needs_no_fix_up(review):
+    env = alone_env(review, plan="FAKE-PLAN\n\nNO OPEN DECISIONS\n")
+    result = review.run("--no-decision-rounds", **env)
+    assert result.returncode == 0, result.stderr
+    assert "with no open decisions" in result.stdout
+    assert not any("fix-up" in c["argv"][-1] for c in review.calls("claude"))
+    template = (ROOT / "templates/runner/plan-part4-alone.md").read_text()
+    assert template.rstrip("\n").endswith(
+        "end your reply with a line that says exactly: NO OPEN DECISIONS"
+    )
+
+
+def test_a_plan_with_neither_headings_nor_the_line_stops_after_a_fix_up(
+    review,
+):
+    env = alone_env(
+        review, plan="FAKE-PLAN\n", **{"fix-up-plan": "FAKE-PLAN again\n"}
+    )
+    result = review.run("--no-decision-rounds", **env)
+    assert result.returncode == 1
+    assert claude_call(review, "fix-up-plan")

@@ -712,12 +712,15 @@ class Runner:
                 copy, source = self.checked(
                     "run:decision-copy",
                     copy,
-                    decisions.renumbered(copy, 1),
+                    [],
                     "fix-up decision copy",
                     DECISION_COPY,
+                    start=1,
+                    none=decisions.is_none,
                 )
                 self.register(copy, source)
-            self.ranking_round(1, sorted(self.numbers()))
+            if self.st["decisions"]:
+                self.ranking_round(1, sorted(self.numbers()))
         self.stop()
 
     # --- the open decisions --------------------------------------------------
@@ -738,14 +741,18 @@ class Runner:
         """Under --no-decision-rounds, the decisions come from the plan's
         own Part 4, which is also each one's latest options until Codex
         ranks it."""
-        if self.st["decisions"] or not decisions.headings(plan):
+        if self.st["decisions"]:
+            return
+        if not decisions.headings(plan) and decisions.says_no_decisions(plan):
             return
         text, source = self.checked(
             "run:plan",
             plan,
-            decisions.renumbered(plan, 1),
+            [],
             "fix-up plan",
             PLAN,
+            start=1,
+            none=decisions.says_no_decisions,
         )
         if source != self.st["steps"]["run:plan"]["out"]:
             transcript.append_once(
@@ -778,16 +785,34 @@ class Runner:
         expected: list[tuple[int, str]],
         tag: str,
         label: str,
+        start: int | None = None,
+        none=None,
     ) -> tuple[str, str]:
         """(text, the file holding it), or Claude's fixed reply and its
         file if text doesn't have exactly one heading per expected
         decision. If the fixed reply doesn't either, it's recorded and the
-        step stops, ready to be asked again."""
-        numbers = [n for n, _ in expected]
+        step stops, ready to be asked again.
+
+        With start, the numbers aren't known yet: a reply needs at least
+        one heading, numbered in order from start, so headings 3 and 5
+        for a start of 3 are a fault. none recognizes a fixed reply that
+        says there are no decisions after all, which is accepted."""
+
+        def wanted(reply: str) -> list[tuple[int, str]]:
+            if start is None:
+                return expected
+            return decisions.renumbered(reply, start)
+
+        def faults(reply: str) -> list[str]:
+            if start is not None and not decisions.headings(reply):
+                return ["It has no `### Decision <n>: <title>` heading."]
+            return decisions.problems(reply, [n for n, _ in wanted(reply)])
+
         out = self.st["steps"][key]["out"]
-        found = decisions.problems(text, numbers)
+        found = faults(text)
         if not found:
             return text, out
+        first = start or 1
         fix_key = f"{key}:fix-up"
         out = out.replace(".md", "-fixed.md")
         fixed = self.claude_step(
@@ -796,14 +821,16 @@ class Runner:
             f"{label} — headings fixed",
             self.template(
                 "runner/fix-up",
-                headings=decisions.heading_lines(expected)
-                or "`### Decision 1: <title>`, `### Decision 2: <title>` "
-                "and so on, one for each decision",
+                headings=decisions.heading_lines(wanted(text))
+                or f"`### Decision {first}: <title>`, `### Decision "
+                f"{first + 1}: <title>` and so on, one for each decision",
                 problems=" ".join(found),
             ),
             out,
         )
-        still = decisions.problems(fixed, numbers)
+        if none and none(fixed):
+            return fixed, out
+        still = faults(fixed)
         if not still:
             return fixed, out
         transcript.append(
@@ -1208,11 +1235,8 @@ class Runner:
             f"messages/06-decisions-r{n}.md",
         )
         if not op.get("registered"):
-            expected = decisions.renumbered(text, start) or [
-                (start, "<title>")
-            ]
             text, source = self.checked(
-                key, text, expected, f"fix-up new decision r{n}", label
+                key, text, [], f"fix-up new decision r{n}", label, start=start
             )
             self.register(text, source)
             op["registered"], op["source"] = True, source

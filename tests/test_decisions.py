@@ -97,3 +97,17 @@ def test_a_report_with_no_decisions_is_the_plan():
     assert decisions.report("r1", "The plan.", []) == (
         "# Review report — r1\n\nThe plan.\n"
     )
+
+
+@pytest.mark.parametrize(
+    "text, says",
+    [
+        ("Plan.\n\nNO OPEN DECISIONS\n", True),
+        ("Plan.\n\n**NO OPEN DECISIONS.**\n\n", True),
+        ("Plan.\n\nNO OPEN DECISIONS\n\n### Decision 1: A\n", False),
+        ("There are no open decisions in Part 3.", False),
+        ("", False),
+    ],
+)
+def test_the_no_decisions_line_must_end_the_plan(text, says):
+    assert decisions.says_no_decisions(text) is says

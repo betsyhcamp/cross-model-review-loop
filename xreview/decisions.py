@@ -18,9 +18,21 @@ HEADING = re.compile(r"^### Decision (\d+): *(.*?)\s*$", re.M)
 SECTION_END = re.compile(r"^(?:### Decision \d+:|#{1,2} )", re.M)
 
 
+# The line a plan under --no-decision-rounds ends with when it has no open
+# decisions, so that a Part 4 without headings is a fault, not "none".
+NO_DECISIONS = "NO OPEN DECISIONS"
+
+
 def is_none(text: str) -> bool:
     """Whether a decision copy says Part 3 has no decisions."""
     return text.strip().rstrip(".").upper() == "NONE"
+
+
+def says_no_decisions(text: str) -> bool:
+    """Whether a plan ends with the line that says it has no decisions."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    last = lines[-1].strip().strip("*_`").rstrip(".") if lines else ""
+    return last.upper() == NO_DECISIONS
 
 
 def headings(text: str) -> list[tuple[int, str]]:
