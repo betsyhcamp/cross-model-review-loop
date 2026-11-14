@@ -638,3 +638,17 @@ def test_the_setup_check_stops_unless_the_os_refuses_the_write(
     with pytest.raises(claude.CallFailed, match=message):
         preflight(case)
     assert not (run_dir / "probe").exists()
+
+
+def test_a_linked_worktrees_git_folders_are_write_denied(repo, folders):
+    worktree = repo.tmp / "wt"
+    repo.git("worktree", "add", "-q", str(worktree))
+    deny = claude.settings(worktree, None, [])["sandbox"]["filesystem"][
+        "denyWrite"
+    ]
+    main_git = (repo.path / ".git").resolve()
+    assert deny == [
+        str(worktree),
+        str(main_git / "worktrees" / "wt"),
+        str(main_git),
+    ]

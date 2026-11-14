@@ -296,6 +296,24 @@ def user_temp() -> list[str]:
     return [str(Path(found).resolve())] if found else []
 
 
+def git_folders(repo: Path) -> list[Path]:
+    """The repo's own Git folder and its shared one, resolved. In a linked
+    worktree both lie outside the working tree, and a commit writes there,
+    so they're write-denied too."""
+    try:
+        found = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return []
+    if found.returncode != 0:
+        return []
+    return [(repo / line).resolve() for line in found.stdout.splitlines()]
+
+
 def user_choices() -> dict:
     """The developer's model choices from their user settings file, for
     Session B to start with."""
@@ -342,7 +360,14 @@ def settings(
             "filesystem": {
                 "disabled": False,
                 "allowWrite": user_temp(),
-                "denyWrite": [str(repo)],
+                "denyWrite": [
+                    str(repo),
+                    *dict.fromkeys(
+                        str(path)
+                        for path in git_folders(repo)
+                        if not path.is_relative_to(repo.resolve())
+                    ),
+                ],
                 "denyRead": [str(path) for path in denied],
             },
         },
