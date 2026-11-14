@@ -412,9 +412,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="end the plan with Claude's own ranking, with no Codex round",
     )
+    p.add_argument(
+        "--claude-model",
+        help="Session B's model (default: your Claude Code settings)",
+    )
+    p.add_argument(
+        "--claude-effort",
+        help="Session B's effort level (default: your Claude Code settings)",
+    )
     p.set_defaults(
         run=lambda a: runner.run(
-            a.name, a.retry_uncertain, a.no_decision_rounds
+            a.name,
+            a.retry_uncertain,
+            a.no_decision_rounds,
+            a.claude_model,
+            a.claude_effort,
         )
     )
 

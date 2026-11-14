@@ -76,6 +76,13 @@ MANAGED_DIR = Path(
     else "/etc/claude-code"
 )
 
+# The developer's model choices, which the runner copies once per review
+# into Session B's settings, since Session B loads none of their settings
+# files. The top-level effortLevel isn't among them: in the user file it
+# doesn't apply to Opus 5.5 and later, but in --settings it would apply to
+# every model. /effort saves levels per model, under modelSettings.
+CHOICES = ("model", "modelSettings")
+
 CallFailed = procs.CallFailed
 CallUncertain = procs.CallUncertain
 OnStart = Callable[[int, "str | None"], None] | None
@@ -282,12 +289,27 @@ def user_temp() -> list[str]:
     return [str(Path(found).resolve())] if found else []
 
 
+def user_choices() -> dict:
+    """The developer's model choices from their user settings file, for
+    Session B to start with."""
+    try:
+        data = json.loads(
+            (config_dir() / "settings.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {key: data[key] for key in CHOICES if key in data}
+
+
 def settings(
     repo: Path,
     session: str | None,
     extra: list[Path],
     review: Path | None = None,
     shared: list[Path] | tuple = (),
+    choices: dict | None = None,
 ) -> dict:
     """Session B's settings for one turn: the sandbox, with the repo
     write-denied, temp folders writable, and the blocked paths read-denied
@@ -296,7 +318,8 @@ def settings(
     Claude's own Read, Grep and Glob aren't covered by the sandbox. The
     output style is the default whatever the developer's settings say:
     the Explanatory and Learning styles add Insight blocks, which would
-    go to Codex with Claude's replies."""
+    go to Codex with Claude's replies. choices are the developer's model
+    choices copied for the review; only the keys in CHOICES are used."""
     denied = [*blocked(repo, session, review, shared), *extra]
     # The pattern also covers a conversation log created after the folders
     # were listed.
@@ -318,17 +341,30 @@ def settings(
         },
         "permissions": {"deny": rules},
         "outputStyle": "default",
+        **{k: v for k, v in (choices or {}).items() if k in CHOICES},
     }
 
 
 def command(
-    claude: str, settings_file: Path, session: str | None, first: bool
+    claude: str,
+    settings_file: Path,
+    session: str | None,
+    first: bool,
+    model: str | None = None,
+    effort: str | None = None,
 ) -> list[str]:
-    """The argv for one turn. With no session, the turn isn't saved."""
+    """The argv for one turn. With no session, the turn isn't saved. A
+    model or effort the developer gave goes here rather than in the
+    settings file, because these flags outrank both the settings files
+    and ANTHROPIC_MODEL."""
     if session is None:
         flags = ["--no-session-persistence"]
     else:
         flags = ["--session-id" if first else "--resume", session]
+    if model:
+        flags += ["--model", model]
+    if effort:
+        flags += ["--effort", effort]
     return [
         claude,
         "-p",
@@ -395,22 +431,28 @@ def turn(
     on_start: OnStart = None,
     review: Path | None = None,
     shared: list[Path] | tuple = (),
+    model: str | None = None,
+    effort: str | None = None,
+    choices: dict | None = None,
 ) -> str:
     """Send one message to Session B and return its final message, which
     is also saved as run_dir/response.md. first starts the session.
     review is the review's folder, so its sibling reviews are blocked;
     shared are paths the handoff or the developer named, which stay
-    readable."""
+    readable. model and effort are the review's, if set; choices are the
+    developer's model choices copied for the review."""
     claude = binary()
     extra = list(extra_blocked or [])
     settings_file = run_dir / "settings.json"
     settings_file.write_text(
-        json.dumps(settings(repo, session, extra, review, shared), indent=2)
+        json.dumps(
+            settings(repo, session, extra, review, shared, choices), indent=2
+        )
         + "\n",
         encoding="utf-8",
     )
     execute(
-        command(claude, settings_file, session, first),
+        command(claude, settings_file, session, first, model, effort),
         prompt,
         repo,
         run_dir,
@@ -450,12 +492,19 @@ def execute(
         ) from exc
 
 
-def preflight(repo: Path, run_dir: Path) -> None:
+def preflight(
+    repo: Path,
+    run_dir: Path,
+    model: str | None = None,
+    effort: str | None = None,
+    choices: dict | None = None,
+) -> str | None:
     """One unsaved turn with Session B's flags, to show before the review
     starts that the sandbox runs a shell command and the mode is Auto.
     Claude Code starts even when its sandbox can't: only the command
     fails. And when Auto isn't available, it reports Auto at startup, then
-    switches to another mode."""
+    switches to another mode. Returns the model Claude Code reported, if
+    any."""
     claude = binary()
     widened = managed_problems()
     if widened:
@@ -468,7 +517,7 @@ def preflight(repo: Path, run_dir: Path) -> None:
         )
     settings_file = run_dir / "settings.json"
     settings_file.write_text(
-        json.dumps(settings(repo, None, []), indent=2) + "\n",
+        json.dumps(settings(repo, None, [], choices=choices), indent=2) + "\n",
         encoding="utf-8",
     )
     prompt = (
@@ -476,7 +525,7 @@ def preflight(repo: Path, run_dir: Path) -> None:
         "\nThen reply with only what it printed."
     )
     execute(
-        command(claude, settings_file, None, False),
+        command(claude, settings_file, None, False, model, effort),
         prompt,
         repo,
         run_dir,
@@ -508,6 +557,12 @@ def preflight(repo: Path, run_dir: Path) -> None:
             "commands of the session you're in, the review's sandbox can't "
             "start inside it."
         )
+    reported = [
+        e.get("model")
+        for e in events
+        if e.get("type") == "system" and e.get("subtype") == "init"
+    ]
+    return reported[0] if reported and reported[0] else None
 
 
 # --- reading a turn's output -------------------------------------------------

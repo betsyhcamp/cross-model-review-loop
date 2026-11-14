@@ -65,6 +65,7 @@ Run `code-review` with the base commit's hash:
 - **Only committed changes are reviewed.** Uncommitted edits to tracked files stop it, and it asks you to commit or stash them. Untracked files, such as notes or a spec, are listed as "not included" and never block it.
 - Session A writes `reviewer-prompt.md` and `claude-handoff.md` in `.reviews/<name>/`, checks the prompt, starts the review in the background, and tells you when it stops. See [docs/reference.md](docs/reference.md) for a file list.
 - To have the plan end with Session B's own ranking of the open decisions, with no Codex round, add `--no-decision-rounds`. You can still ask for Codex's take later.
+- Session B uses the model and effort from your Claude Code settings. To choose others for one review, add `--claude-model <model>` or `--claude-effort <level>`.
 - To start or pick up a review from another conversation, run `/xreview:code-resume <name>`.
 
 ### At a stop

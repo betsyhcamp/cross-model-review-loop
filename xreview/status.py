@@ -114,6 +114,8 @@ def lines_for(job: runner.Runner) -> list[str]:
         )
     elif (review / "decided-plan.md").exists():
         lines.append("A Decided Plan is recorded.")
+    if st.get("session_b"):
+        lines.append(f"Session B runs on {runner.runs_with(st['session_b'])}.")
     lines.append(refusals(review, steps))
     if not working and st["stopped"] and not st["op"]:
         lines += reopen(job)
@@ -140,6 +142,7 @@ def reopen(job: runner.Runner) -> list[str]:
     commands = []
     session = job.st.get("claude_session")
     if job.st.get("claude_started") and session:
+        runs = job.session_b()
         settings = Path.cwd() / job.review / "session-b-settings.json"
         settings.write_text(
             json.dumps(
@@ -149,6 +152,7 @@ def reopen(job: runner.Runner) -> list[str]:
                     [],
                     job.review.resolve(),
                     job.shared_paths(),
+                    runs["choices"],
                 ),
                 indent=2,
             )
@@ -160,6 +164,14 @@ def reopen(job: runner.Runner) -> list[str]:
             f"{session} --settings {shlex.quote(str(settings))} --tools "
             f"{claude.TOOLS} --allowedTools {claude.ALLOWED_TOOLS} "
             "--permission-mode auto --strict-mcp-config --setting-sources="
+            + "".join(
+                f" {flag} {shlex.quote(value)}"
+                for flag, value in (
+                    ("--model", runs["model"] or runs["reported"]),
+                    ("--effort", runs["effort"]),
+                )
+                if value
+            )
         )
     thread = job.state.get("reviewer_session_id")
     if thread:

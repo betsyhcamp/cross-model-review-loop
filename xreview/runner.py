@@ -101,6 +101,17 @@ def join(*parts: str) -> str:
     return "\n\n".join(part.rstrip("\n") for part in parts) + "\n"
 
 
+def runs_with(rec: dict) -> str:
+    """Session B's model and effort, as status and messages name them."""
+    model = rec["model"] or rec["reported"] or "Claude Code's default model"
+    effort = (
+        f"effort {rec['effort']}"
+        if rec["effort"]
+        else "the effort your Claude Code settings set"
+    )
+    return f"{model}, {effort}"
+
+
 def fenced(text: str) -> str:
     """text in a backtick fence longer than any run of backticks in it."""
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
@@ -161,12 +172,23 @@ class Lock:
 class Runner:
     """One xreview command on one review, holding its run state."""
 
-    def __init__(self, name: str, retry: bool = False, alone: bool = False):
+    def __init__(
+        self,
+        name: str,
+        retry: bool = False,
+        alone: bool = False,
+        model: str | None = None,
+        effort: str | None = None,
+    ):
         cli.enter_repo()
         self.name = name
         self.review = cli.review_dir(name)
         self.retry = retry
         self.alone = alone  # --no-decision-rounds
+        self.model, self.effort = (
+            model,
+            effort,
+        )  # --claude-model, --claude-effort
         self.state = transcript.read_state(self.review)
         self.st = self.load()
 
@@ -235,6 +257,51 @@ class Runner:
         return [
             self.template("runner/repo-instructions", files="\n\n".join(files))
         ]
+
+    def session_b(self) -> dict:
+        """How Session B runs for this review: the model and effort the
+        developer gave, the model choices copied from their settings when
+        the review started, and the model Claude Code reported at setup."""
+        return self.st.get("session_b") or {
+            "model": None,
+            "effort": None,
+            "choices": {},
+            "reported": None,
+        }
+
+    def choose_session_b(self) -> None:
+        """Settle Session B's model and effort once per review. The
+        developer's model choices are copied from their settings the first
+        time. A model or effort given is kept, but once Session B's first
+        turn has run a different one is refused: its session is fixed."""
+        rec = self.st.get("session_b")
+        if rec is None:
+            rec = {
+                "model": None,
+                "effort": None,
+                "choices": claude.user_choices(),
+                "reported": None,
+            }
+            self.st["session_b"] = rec
+        given = {"model": self.model, "effort": self.effort}
+        now = {
+            "model": rec["model"] or rec["reported"],
+            "effort": rec["effort"],
+        }
+        changed = [
+            key for key, value in given.items() if value and value != now[key]
+        ]
+        if changed and self.st["claude_started"]:
+            raise cli.CheckFailed(
+                f"Session B's {' and '.join(changed)} can't change once its "
+                f"session has started: this review runs with "
+                f"{runs_with(rec)}. Start a new review to use another."
+            )
+        if changed:
+            rec.update({key: given[key] for key in changed})
+            rec["reported"] = None
+            self.st["steps"].pop("run:setup-check", None)
+        self.save()
 
     def resent(self, prompt: str) -> str:
         return join(self.template("runner/resend-note"), prompt)
@@ -462,6 +529,7 @@ class Runner:
         )
         crash(f"{key}:before")
         try:
+            runs = self.session_b()
             text = claude.turn(
                 self.resent(prompt) if resend else prompt,
                 Path.cwd(),
@@ -472,6 +540,11 @@ class Runner:
                 self.recorder(rec),
                 review=self.review.resolve(),
                 shared=self.shared_paths(),
+                # With no model given, the one reported at setup keeps the
+                # whole review on one model.
+                model=runs["model"] or runs["reported"],
+                effort=runs["effort"],
+                choices=runs["choices"],
             )
         except (claude.CallFailed, claude.CallUncertain) as exc:
             self.fail(rec, run_dir, exc, claude.DISPLAY_NAME)
@@ -542,8 +615,15 @@ class Runner:
         rec = self.new_step(
             key, run_dir, provider="claude", label="Claude setup check"
         )
+        runs = self.st["session_b"]
         try:
-            claude.preflight(Path.cwd(), run_dir.resolve())
+            runs["reported"] = claude.preflight(
+                Path.cwd(),
+                run_dir.resolve(),
+                runs["model"],
+                runs["effort"],
+                runs["choices"],
+            )
         except (claude.CallFailed, claude.CallUncertain) as exc:
             rec["status"] = FAILED
             self.save()
@@ -555,6 +635,7 @@ class Runner:
     def run(self) -> None:
         """Start the review, or pick it up from the last finished step,
         including an operation at a stop that's still pending."""
+        self.choose_session_b()
         op = self.st["op"]
         if op and op["kind"] != "run":
             self.resume(op)
@@ -1286,8 +1367,14 @@ def awake(runner: Runner):
         runner.save()
 
 
-def run(name: str, retry: bool, alone: bool = False) -> None:
-    runner = Runner(name, retry, alone)
+def run(
+    name: str,
+    retry: bool,
+    alone: bool = False,
+    model: str | None = None,
+    effort: str | None = None,
+) -> None:
+    runner = Runner(name, retry, alone, model, effort)
     with Lock(runner.review), awake(runner):
         runner.run()
 

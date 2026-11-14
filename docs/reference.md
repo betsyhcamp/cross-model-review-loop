@@ -26,6 +26,7 @@
 
 - **None of your settings files.** Session B starts with `--setting-sources=`, so it doesn't load `~/.claude/settings.json`, a project's `.claude/settings.json` or `.claude/settings.local.json`, or any `CLAUDE.md`. Those could widen its sandbox.
 - **The repository's own instructions, in its first message.** The runner includes the tracked `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` at the repository root, under a note that xreview's instructions come first. Untracked files, such as `CLAUDE.local.md`, aren't included. Your personal rules reach Session B through the handoff Session A writes.
+- **Your model choices, copied once.** When the review starts, the runner copies `model` and `modelSettings`, where `/effort` saves a level per model, from your user settings into Session B's own settings. `--claude-model` and `--claude-effort` override them. The model Session B reports at its setup check is then used for the whole review, and `xreview run` refuses a different model or effort once Session B's first turn has run.
 - **Managed settings still apply.** The setup check stops with exit 3 if a managed settings file sets `sandbox.excludedCommands` or `sandbox.filesystem.disabled`. Exclusions set by MDM profiles or server-managed settings aren't files `xreview` can read, so they're a known limit.
 
 ## Commands
@@ -36,7 +37,7 @@ Session A runs these for you. Each one except `status` takes `--retry-uncertain`
 |---|---|
 | `xreview prepare <base>` | Checks git and creates the review folder |
 | `xreview check <name>` | Checks the tree and the reviewer prompt |
-| `xreview run <name> [--no-decision-rounds]` | Starts the review, or picks it up where it stopped |
+| `xreview run <name> [--no-decision-rounds] [--claude-model <model>] [--claude-effort <level>]` | Starts the review, or picks it up where it stopped |
 | `xreview status <name>` | Shows where the review stands |
 | `xreview ask-claude <name> --file <words>` | Sends your words to Session B |
 | `xreview ask-codex <name> [--decisions 2,4] --file <words>` | Sends your words to Codex, with the latest options of the decisions named |

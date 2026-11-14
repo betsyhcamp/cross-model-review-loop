@@ -221,6 +221,68 @@ def test_without_instruction_files_the_first_message_is_unchanged(review):
     assert "instruction files" not in rebuttal
 
 
+def flag_value(call: dict, flag: str) -> str | None:
+    argv = call["argv"]
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+def test_session_b_starts_with_the_developers_model_choices(review, repo):
+    config = repo.tmp / "my-claude"
+    config.mkdir()
+    (config / "settings.json").write_text(
+        json.dumps(
+            {
+                "model": "claude-sonnet-5",
+                "modelSettings": {"claude-sonnet-5": {"effortLevel": "high"}},
+                "effortLevel": "low",
+                "sandbox": {"excludedCommands": ["git *"]},
+            }
+        )
+    )
+    result = review.run(CLAUDE_CONFIG_DIR=str(config))
+    assert result.returncode == 0, result.stderr
+    setup, *turns = review.calls("claude")
+    for call in (setup, *turns):
+        given = call["settings"]
+        assert given["model"] == "claude-sonnet-5"
+        assert given["modelSettings"] == {
+            "claude-sonnet-5": {"effortLevel": "high"}
+        }
+        assert "effortLevel" not in given
+        assert "excludedCommands" not in given["sandbox"]
+        assert flag_value(call, "--effort") is None
+    # The model setup reported keeps the rest of the review on one model.
+    assert flag_value(setup, "--model") is None
+    assert {flag_value(call, "--model") for call in turns} == {
+        "claude-sonnet-5"
+    }
+    assert review.run_state()["session_b"]["reported"] == "claude-sonnet-5"
+
+
+def test_a_model_and_effort_given_reach_every_turn(review):
+    result = review.run("--claude-model", "opus-x", "--claude-effort", "max")
+    assert result.returncode == 0, result.stderr
+    (review.path / "inbox").mkdir(exist_ok=True)
+    (review.path / "inbox" / "1.txt").write_text("Is it safe?\n")
+    asked = review.xreview("ask-claude", review.name, "--file", "inbox/1.txt")
+    assert asked.returncode == 0, asked.stderr
+    for call in review.calls("claude"):
+        assert flag_value(call, "--model") == "opus-x"
+        assert flag_value(call, "--effort") == "max"
+
+
+def test_a_different_model_once_session_b_started_is_refused(review):
+    review.run()
+    before = review.counts()
+    result = review.run("--claude-model", "other-model")
+    assert result.returncode == 1
+    assert "can't change once its session has started" in result.stderr
+    assert "fake-default-model" in result.stderr
+    assert review.counts() == before
+    same = review.run("--claude-model", "fake-default-model")
+    assert same.returncode == 0, same.stderr
+
+
 def test_run_at_a_stop_reports_it_and_sends_nothing(review):
     review.run()
     before = review.counts()

@@ -27,7 +27,9 @@ holds it.
 FAKE_CLAUDE_LOG, if set, gets one JSON line per call with the
 argv, the settings file's contents, the prompt, the working folder and the
 environment variables the tests look at. FAKE_CLAUDE_PIDS, if set, gets
-this process's ID. Events follow the shape of Claude Code 2.1.319 output.
+this process's ID. Events follow the shape of Claude Code 2.1.319 output;
+the init event reports the --model given, else the settings file's model,
+else "fake-default-model".
 """
 
 import json
@@ -178,6 +180,9 @@ emit(
         "subtype": "init",
         "session_id": session,
         "permissionMode": flag("--permission-mode"),
+        "model": flag("--model")
+        or (settings or {}).get("model")
+        or "fake-default-model",
         "cwd": os.getcwd(),
         "scratchpad_path": (
             f"{tmp}/claude-{os.getuid()}/fake/{session}/scratchpad"
