@@ -5,61 +5,65 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 from pathlib import Path
+import re
 import shutil
-import signal
 import subprocess
 import sys
-import time
+from typing import Callable
 import uuid
+
+from .. import procs
 
 DISPLAY_NAME = "Codex"
 TIMEOUT_SECONDS = 40 * 60
 PROGRESS_SECONDS = 30
-STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+OnStart = Callable[[int, "str | None"], None] | None
 
 
-class ReviewerError(Exception):
-    """A failed reviewer call.
-
-    The message is user-facing; diagnostics stay in the run folder.
-    """
-
-
-class Stopped(Exception):
-    """The runner received a stop signal while Codex was running."""
+# Calls fail with procs.CallFailed when Codex provably didn't run the turn,
+# and with procs.CallUncertain when it may have. When unsure, uncertain.
+CallFailed = procs.CallFailed
+CallUncertain = procs.CallUncertain
 
 
 def version() -> str:
     """Return `codex --version` output, such as "codex-cli 0.160.1"."""
     if shutil.which("codex") is None:
-        raise ReviewerError("Codex CLI not found on PATH.")
+        raise CallFailed("Codex CLI not found on PATH.")
     result = subprocess.run(
         ["codex", "--version"], capture_output=True, text=True
     )
     if result.returncode != 0:
-        raise ReviewerError(
-            f"`codex --version` failed: {result.stderr.strip()}"
-        )
+        raise CallFailed(f"`codex --version` failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
-def start(prompt: str, repo: Path, run_dir: Path) -> tuple[str, str]:
-    """Send prompt to a new read-only session; return (session_id, reply)."""
-    run(command(run_dir), prompt, repo, run_dir)
+def start(
+    prompt: str, repo: Path, run_dir: Path, on_start: OnStart = None
+) -> tuple[str, str]:
+    """Send prompt to a new read-only session; return (session_id, reply).
+
+    on_start gets Codex's process ID and start time as soon as it starts.
+    """
+    run(command(run_dir), prompt, repo, run_dir, on_start)
     return parse(run_dir)
 
 
-def resume(session_id: str, prompt: str, repo: Path, run_dir: Path) -> str:
+def resume(
+    session_id: str,
+    prompt: str,
+    repo: Path,
+    run_dir: Path,
+    on_start: OnStart = None,
+) -> str:
     """Send prompt to an existing session; return the reply.
 
     Codex works in the folder it's resumed from, so repo must be the repo
     root, as it was for start.
     """
-    run(command(run_dir, session_id), prompt, repo, run_dir)
+    run(command(run_dir, session_id), prompt, repo, run_dir, on_start)
     return parse(run_dir, session_id)[1]
 
 
@@ -80,87 +84,101 @@ def command(run_dir: Path, session_id: str | None = None) -> list[str]:
     return ["codex", *args]
 
 
-def run(argv: list[str], prompt: str, repo: Path, run_dir: Path) -> None:
+def run(
+    argv: list[str], prompt: str, repo: Path, run_dir: Path, on_start: OnStart
+) -> None:
+    """Run Codex in its own process group, prompt on stdin, output to files.
+
+    On a timeout or a stop signal, the whole group is killed (procs.run).
+    A nonzero exit counts as failed only when Codex never started the turn.
+    """
     if shutil.which("codex") is None:
-        raise ReviewerError("Codex CLI not found on PATH.")
-    code = execute(argv, prompt, repo, run_dir)
+        raise CallFailed("Codex CLI not found on PATH.")
+    try:
+        code = procs.run(
+            argv,
+            prompt,
+            repo,
+            run_dir,
+            timeout=TIMEOUT_SECONDS,
+            progress_every=PROGRESS_SECONDS,
+            progress=lambda elapsed: report_progress(run_dir, elapsed),
+            on_start=on_start,
+        )
+    except OSError as exc:
+        raise CallFailed(f"Codex couldn't be started: {exc}") from exc
+    except procs.Stopped as exc:
+        raise CallUncertain(
+            f"The runner was stopped ({exc}) and Codex was killed. It may "
+            "have finished its turn first."
+        ) from exc
+    except procs.TimedOut as exc:
+        raise CallUncertain(
+            f"Codex timed out after {TIMEOUT_SECONDS // 60} minutes and was "
+            "killed. It may have finished its turn first."
+        ) from exc
     if code != 0:
         stderr = (run_dir / "stderr.txt").read_text(errors="replace")
         tail = "\n".join(stderr.splitlines()[-20:])
-        raise ReviewerError(
+        message = (
             f"Codex exited with code {code}. Last lines of stderr:\n{tail}"
+        )
+        if "already has an active writer" in stderr:
+            raise CallFailed(
+                "Codex refused the call: another Codex process is still "
+                f"working in this thread.\n{message}"
+            )
+        if not turn_started(run_dir):
+            raise CallFailed(message)
+        raise CallUncertain(
+            f"{message}\nCodex had started the turn, so it may have run."
         )
 
 
-def execute(argv: list[str], prompt: str, repo: Path, run_dir: Path) -> int:
-    """Run Codex in its own process group, prompt on stdin, output to files.
-
-    On a timeout or a stop signal (SIGTERM, SIGHUP, SIGINT), kill the whole
-    group, so no Codex turn keeps running after the runner gives up on it.
-    """
-    previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
-    for sig in STOP_SIGNALS:
-        signal.signal(sig, stop)
-    try:
-        with (
-            (run_dir / "events.jsonl").open("wb") as out,
-            (run_dir / "stderr.txt").open("wb") as err,
-        ):
-            with subprocess.Popen(
-                argv,
-                cwd=repo,
-                stdin=subprocess.PIPE,
-                stdout=out,
-                stderr=err,
-                start_new_session=True,
-            ) as proc:
-                try:
-                    return wait_for(proc, prompt, run_dir)
-                except (subprocess.TimeoutExpired, Stopped) as exc:
-                    # A stop from Claude Code signals the whole process tree
-                    # at once, so Codex may already be dead. Not yet reaped,
-                    # macOS reports EPERM for its group; once reaped, ESRCH.
-                    with contextlib.suppress(
-                        PermissionError, ProcessLookupError
-                    ):
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    proc.wait()
-                    if isinstance(exc, Stopped):
-                        raise ReviewerError(
-                            f"The runner was stopped ({exc}); Codex was "
-                            "killed."
-                        ) from exc
-                    raise ReviewerError(
-                        f"Codex timed out after {TIMEOUT_SECONDS // 60} "
-                        "minutes and was killed."
-                    ) from exc
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+def turn_started(run_dir: Path) -> bool:
+    events = (run_dir / "events.jsonl").read_text(errors="replace")
+    return '"turn.started"' in events
 
 
-def stop(signum: int, frame) -> None:
-    raise Stopped(signal.Signals(signum).name)
+# A command Codex's read-only sandbox refused. Any other failed command is
+# an ordinary failure.
+REFUSAL = re.compile(r"operation not permitted|read-only file system", re.I)
 
 
-def wait_for(proc: subprocess.Popen, prompt: str, run_dir: Path) -> int:
-    """Send the prompt, then wait for Codex to exit.
-
-    Reports progress every PROGRESS_SECONDS, and raises TimeoutExpired once
-    TIMEOUT_SECONDS have passed.
-    """
-    began = time.monotonic()
-    data: bytes | None = prompt.encode("utf-8")
-    while True:
-        left = TIMEOUT_SECONDS - (time.monotonic() - began)
-        try:
-            proc.communicate(data, timeout=max(0, min(PROGRESS_SECONDS, left)))
-            return proc.returncode
-        except subprocess.TimeoutExpired:
-            if left <= PROGRESS_SECONDS:
-                raise
-        data = None  # communicate keeps sending what's left of the prompt
-        report_progress(run_dir, time.monotonic() - began)
+def stats(run_dir: Path) -> dict:
+    """Commands run so far, refusals counted apart from ordinary
+    failures, and the last few commands, with none of Codex's text."""
+    path = run_dir / "events.jsonl"
+    commands = []
+    if path.exists():
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item") if isinstance(event, dict) else None
+            if (
+                event.get("type") == "item.completed"
+                and isinstance(item, dict)
+                and item.get("type") == "command_execution"
+            ):
+                commands.append(item)
+    failed = [c for c in commands if c.get("exit_code") not in (0, None)]
+    refused = [
+        c for c in failed if REFUSAL.search(str(c.get("aggregated_output")))
+    ]
+    actions = []
+    for item in commands[-3:]:
+        command = str(item.get("command", ""))
+        # Codex wraps each command in its shell: /bin/zsh -lc "..."
+        command = re.sub(r"^\S*sh -lc ", "", command).strip("'\"")
+        actions.append(" ".join(command.split())[:60])
+    return {
+        "tools": len(commands),
+        "refused": len(refused),
+        "failed": len(failed) - len(refused),
+        "actions": actions,
+    }
 
 
 def report_progress(run_dir: Path, elapsed: float) -> None:
@@ -185,49 +203,54 @@ def parse(
 ) -> tuple[str, str]:
     """Check the event stream and return (session_id, reply).
 
+    A turn Codex reports as failed raises CallFailed. A missing, malformed
+    or empty result raises CallUncertain, because the turn may have run.
     A top-level "error" event isn't fatal when the turn completed: Codex
     emits one for a stream error it retries by itself (spec §8.3).
     """
     events = []
-    stream = (run_dir / "events.jsonl").read_text(errors="replace")
+    path = run_dir / "events.jsonl"
+    if not path.exists():
+        raise CallUncertain("Codex left no events; see the run folder.")
+    stream = path.read_text(errors="replace")
     for line in stream.splitlines():
         if not line.strip():
             continue
         try:
             event = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ReviewerError(
+            raise CallUncertain(
                 "Codex printed a line that isn't JSON; see events.jsonl."
             ) from exc
         if not isinstance(event, dict):
-            raise ReviewerError("Codex printed an event that isn't an object.")
+            raise CallUncertain("Codex printed an event that isn't an object.")
         events.append(event)
     for event in events:
         if event.get("type") == "turn.failed":
             error = event.get("error")
             detail = error.get("message") if isinstance(error, dict) else None
-            raise ReviewerError(f"Codex reported a failed turn: {detail}.")
+            raise CallFailed(f"Codex reported a failed turn: {detail}.")
     started = [
         e.get("thread_id") for e in events if e.get("type") == "thread.started"
     ]
     completed = [e for e in events if e.get("type") == "turn.completed"]
     if len(started) != 1 or len(completed) != 1:
-        raise ReviewerError(
+        raise CallUncertain(
             f"Codex sent {len(started)} thread.started and {len(completed)} "
             "turn.completed events; expected exactly one of each."
         )
     try:
         session = str(uuid.UUID(started[0]))
     except (ValueError, TypeError, AttributeError) as exc:
-        raise ReviewerError(
+        raise CallUncertain(
             "Codex did not return a valid session UUID."
         ) from exc
     if expected_session and session != expected_session:
-        raise ReviewerError(
+        raise CallUncertain(
             "Codex resumed a different session; refusing its result."
         )
     response = run_dir / "response.md"
     reply = response.read_text(encoding="utf-8") if response.exists() else ""
     if not reply.strip():
-        raise ReviewerError("Codex returned an empty response.")
+        raise CallUncertain("Codex returned an empty response.")
     return session, reply

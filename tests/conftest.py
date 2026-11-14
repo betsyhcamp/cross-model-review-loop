@@ -2,8 +2,8 @@
 
 Each test gets its own copy of a temporary git repo with two commits after
 a base commit. PATH holds only git, a python3 that runs this test's
-interpreter, and a codex shim that runs tests/fake_codex.py. There are no
-model calls.
+interpreter, a codex shim that runs tests/fake_codex.py and a claude shim
+that runs tests/fake_claude.py. There are no model calls.
 """
 
 from __future__ import annotations
@@ -21,6 +21,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 XREVIEW = ROOT / "bin" / "xreview"
 FAKE_CODEX = ROOT / "tests" / "fake_codex.py"
+FAKE_CLAUDE = ROOT / "tests" / "fake_claude.py"
+FAKE_SETTINGS = ("FAKE_CODEX_CASE", "FAKE_CLAUDE_CASE", "FAKE_CLAUDE_TEXT")
+# Set when the tests run inside a Claude Code session. The Claude adapter
+# falls back to it, so without this a test could start the real claude.
+REAL_BINARIES = ("CLAUDE_CODE_EXECPATH",)
 sys.path.insert(0, str(ROOT))
 
 
@@ -54,7 +59,8 @@ class Shared:
     per test: macOS adds ~0.1s to the first run of each new executable, and
     git calls are slow too."""
 
-    tools: Path  # git and python3, without codex
+    tools: Path  # git and python3, without codex or claude
+    claude_bin: Path  # the claude shim alone
     template: Path
     env: dict[str, str]
     base: str
@@ -65,18 +71,25 @@ class Shared:
 def shared(tmp_path_factory: pytest.TempPathFactory) -> Shared:
     root = tmp_path_factory.mktemp("shared")
     tools, codex_dir = root / "tools", root / "codex-bin"
+    claude_dir = root / "claude-bin"
     template = root / "repo"
-    for folder in (tools, codex_dir, template):
+    for folder in (tools, codex_dir, claude_dir, template):
         folder.mkdir()
     (tools / "git").symlink_to(shutil.which("git"))
     write_exe(tools / "python3", f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
     write_exe(
         codex_dir / "codex", f'#!/bin/sh\nexec python3 "{FAKE_CODEX}" "$@"\n'
     )
+    write_exe(
+        claude_dir / "claude",
+        f'#!/bin/sh\nexec python3 "{FAKE_CLAUDE}" "$@"\n',
+    )
     env = {
         **os.environ,
-        "PATH": f"{codex_dir}:{tools}",
+        "PATH": f"{codex_dir}:{claude_dir}:{tools}",
         "HOME": str(root),
+        "CLAUDE_CONFIG_DIR": str(root / "claude-config"),
+        "CLAUDE_CODE_TMPDIR": str(root / "claude-tmp"),
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_AUTHOR_NAME": "Test",
@@ -84,12 +97,13 @@ def shared(tmp_path_factory: pytest.TempPathFactory) -> Shared:
         "GIT_COMMITTER_NAME": "Test",
         "GIT_COMMITTER_EMAIL": "test@example.invalid",
     }
-    env.pop("FAKE_CODEX_CASE", None)
+    for name in (*FAKE_SETTINGS, *REAL_BINARIES):
+        env.pop(name, None)
     run_git(template, env, "init", "-q", "-b", "main")
     base = commit(template, env, "a.txt", "one\n", "Base commit")
     commit(template, env, "b.txt", "two\n", "Add b")
     head = commit(template, env, "a.txt", "one\nmore\n", "Extend a")
-    return Shared(tools, template, env, base, head)
+    return Shared(tools, claude_dir, template, env, base, head)
 
 
 class Repo:
@@ -98,6 +112,7 @@ class Repo:
 
     def __init__(self, shared: Shared, tmp: Path):
         self.tools, self.env = shared.tools, shared.env
+        self.claude_bin = shared.claude_bin
         self.base, self.head = shared.base, shared.head
         self.tmp = tmp
         self.path = tmp / "repo with spaces"
@@ -136,6 +151,13 @@ class Repo:
             f"Review the commits {refs}.\n\n{block}\n\n"
             "You have read-only access.\n"
         )
+
+
+@pytest.fixture(autouse=True)
+def no_real_binaries(monkeypatch):
+    """Keep in-process tests from finding the real claude, too."""
+    for name in (*FAKE_SETTINGS, *REAL_BINARIES):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

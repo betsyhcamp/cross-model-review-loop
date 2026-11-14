@@ -4,15 +4,47 @@
 
 ```text
 .reviews/<name>/
-├── state.json            # base, reviewed head, Codex session ID
-├── reviewer-prompt.md    # written by Session A
-├── claude-handoff.md     # written by Session A
-├── messages/             # Claude's messages and sections (rebuttal, plan, rankings, ...)
-├── runs/NN-<step>/       # one per Codex call: prompt.md, response.md, events.jsonl, stderr.txt
-├── decided-plan.md       # written when you finalize
-└── transcript.md         # the append-only record of the whole review
+├── state.json              # base, reviewed head, Codex session ID
+├── run-state.json          # the runner's steps, decisions and stops
+├── reviewer-prompt.md      # written by Session A
+├── claude-handoff.md       # written by Session A
+├── inbox/                  # your words, as Session A wrote them down
+├── messages/               # Session B's replies, and a copy of your words for each step
+├── runs/NN-<step>/         # one per reviewer call: prompt.md, response.md, events.jsonl, stderr.txt
+├── report.md               # the plan and each decision's latest options
+├── decided-plan.md         # written when you finalize
+├── session-b-settings.json # written by status, for opening Session B at your desk
+└── transcript.md           # the append-only record of the whole review
 ```
 
 - `.reviews/` is added to `.git/info/exclude`, so nothing is committed and nothing in your repository changes.
 - `<name>` is the branch name with `/` replaced by `-`, or `review-<short sha>` on a detached HEAD. A second review of the same branch gets `-2`, then `-3`. Apart from `/`, a branch name with characters other than letters, digits, `.`, `_` and `-` is refused.
-- `runs/` keeps each Codex call's raw output for diagnosing failures. The transcript holds only Codex's final answer to each message.
+- `runs/` keeps each call's raw output for diagnosing failures. A Session B call's folder also holds the `settings.json` it ran with. The transcript holds only each reviewer's final answer to each message.
+- `run.lock` exists while an `xreview` command is working on the review.
+
+## What Session B loads
+
+- **None of your settings files.** Session B starts with `--setting-sources=`, so it doesn't load `~/.claude/settings.json`, a project's `.claude/settings.json` or `.claude/settings.local.json`, or any `CLAUDE.md`. Those could widen its sandbox.
+- **The repository's own instructions, in its first message.** The runner includes the tracked `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` at the repository root, under a note that xreview's instructions come first. Untracked files, such as `CLAUDE.local.md`, aren't included. Your personal rules reach Session B through the handoff Session A writes.
+- **Your model choices, copied once.** When the review starts, the runner copies `model` and `modelSettings`, where `/effort` saves a level per model, from your user settings into Session B's own settings. `--claude-model` and `--claude-effort` override them. The model Session B reports at its setup check is then used for the whole review, and `xreview run` refuses a different model or effort once Session B's first turn has run.
+- **Managed settings still apply.** The setup check stops with exit 3 if a managed settings file sets `sandbox.excludedCommands` or `sandbox.filesystem.disabled`. Exclusions set by MDM profiles or server-managed settings aren't files `xreview` can read, so they're a known limit.
+
+## Commands
+
+Session A runs these for you. Each one except `status` takes `--retry-uncertain`, which sends again a call that may have run.
+
+| Command | What it does |
+|---|---|
+| `xreview prepare <base>` | Checks git and creates the review folder |
+| `xreview check <name>` | Checks the tree and the reviewer prompt |
+| `xreview run <name> [--no-decision-rounds] [--claude-model <model>] [--claude-effort <level>]` | Starts the review, or picks it up where it stopped |
+| `xreview status <name>` | Shows where the review stands |
+| `xreview ask-claude <name> --file <words>` | Sends your words to Session B |
+| `xreview ask-codex <name> [--decisions 2,4] --file <words>` | Sends your words to Codex, with the latest options of the decisions named |
+| `xreview rank <name> --file <words>` | Has both reviewers rank a new decision |
+| `xreview finalize <name> --file <words>` | Has Session B write the Decided Plan |
+| `xreview prompt` and `xreview append` | Print a template for Claude, and record Claude's own section |
+
+`--file` names a file in the review's `inbox/` folder, relative to `.reviews/<name>/`.
+
+Exit codes: 0 success, including a stop; 1 a check failed; 2 a usage error; 3 a call failed, so a plain retry is safe; 4 a call is uncertain, because it may have run.

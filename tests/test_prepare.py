@@ -100,6 +100,39 @@ def test_codex_missing_or_broken_is_refused(repo, case, reason):
     assert "brew install --cask codex" in result.stderr
 
 
+def without_claude(repo) -> str:
+    """The test PATH with the claude shim taken out."""
+    folders = repo.env["PATH"].split(":")
+    return ":".join(f for f in folders if f != str(repo.claude_bin))
+
+
+def test_claude_missing_is_refused_with_setup_instructions(repo):
+    result = repo.xreview("prepare", repo.base, PATH=without_claude(repo))
+    assert result.returncode == 1
+    assert "Claude Code CLI not found" in result.stderr
+    assert "doesn't put `claude` on your PATH" in result.stderr
+    assert not (repo.path / ".reviews").exists()
+
+
+def test_claude_found_only_through_the_session_is_used_with_a_note(repo):
+    shim = str(repo.claude_bin / "claude")
+    result = repo.xreview(
+        "prepare",
+        repo.base,
+        PATH=without_claude(repo),
+        CLAUDE_CODE_EXECPATH=shim,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"use this session's Claude Code, `{shim}`" in result.stdout
+    assert "put `claude` on your PATH" in result.stdout
+
+
+def test_claude_on_path_needs_no_note(repo):
+    result = repo.xreview("prepare", repo.base)
+    assert result.returncode == 0, result.stderr
+    assert "isn't on your PATH" not in result.stdout
+
+
 def test_outside_a_git_repo_is_refused(repo):
     result = repo.xreview("prepare", repo.base, cwd=repo.tmp)
     assert result.returncode == 1
@@ -202,8 +235,8 @@ def test_tree_check(repo, review):
     assert (
         f"HEAD has moved since prepare (reviewed {repo.head[:7]}, now "
         f"{later[:7]}). This review covers {repo.head[:7]} only. To "
-        "review the new commits, re-run code-prepare in the session "
-        "that wrote the code."
+        "review the new commits, run /xreview:code-review again in the "
+        "session that wrote the code."
     ) in result.stderr
 
 
@@ -296,7 +329,21 @@ def test_every_template_a_skill_names_exists():
         # fails here instead of being skipped.
         assert text.count("--template") == len(found), skill
         names.update(found)
-    assert len(names) >= 5, names
+    assert len(names) >= 4, names
+    for name in sorted(names):
+        assert (ROOT / "templates" / f"{name}.md").is_file(), name
+
+
+def test_every_template_the_runner_names_exists():
+    """The runner reads its prompts from templates; a renamed or missing
+    one would only fail mid-review."""
+    names = set()
+    for module in ("runner.py", "status.py"):
+        text = (ROOT / "xreview" / module).read_text()
+        names.update(
+            re.findall(r'"((?:code|shared|runner)/[a-z0-9-]+)"', text)
+        )
+    assert len(names) >= 15, names
     for name in sorted(names):
         assert (ROOT / "templates" / f"{name}.md").is_file(), name
 

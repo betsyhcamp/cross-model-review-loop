@@ -1,0 +1,1 @@
+From your Step 5 plan, copy the Part 3 descriptions of decisions {numbers} only, word for word, and nothing else from the plan, such as Part 4, defaults or preferences. Your reply will be sent to the reviewer so that it can rank them without seeing your view. Put each under the heading it has in your Part 4, `### Decision <n>: <title>`, and use no other headings.

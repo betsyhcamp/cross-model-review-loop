@@ -1,6 +1,6 @@
 Below is the reviewer's latest view on the open decisions. Merge it with your own view of the same decisions into one final set of options. In a ranking round, your own view is the ranking you wrote before seeing the reviewer's; after a follow-up round, it's your latest Part 4.
 
-Write the result under the heading "Part 4 — Options for the open decisions (Claude and Codex)". For each decision:
+Write the result under the heading "Part 4 — Options for the open decisions (Claude and Codex)". Give each decision its own heading, exactly `### Decision <n>: <title>`, with the number and title listed at the end of this message, in that order. Use that form for no other heading, and cover only those decisions. For each decision:
 
 - List every option either of you gave, plus any option neither of you raised that belongs in the set. Treat options that are the same in substance as one option. Rank them from best to worst, and give the pros and cons of each. Tag each option (both), (Claude), (Codex), or (new) for one neither of you raised. After a follow-up round, an option keeps its tag from your latest Part 4.
 - Give your recommendation and explain your reasoning. If it's a coin flip, say so. If there's genuinely only one good option, say so. If your top pick can't be chosen or carried out without something only a person knows, add a line under it: "Needs from you: <what's missing>." Don't add it if you could carry out your top pick today, even provisionally.
