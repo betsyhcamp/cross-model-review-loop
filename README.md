@@ -1,6 +1,6 @@
 # xreview
 
-[![CI](https://github.com/betsyhcamp/cross-model-review-loop/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/betsyhcamp/cross-model-review-loop/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg) [![License: MIT](https://img.shields.io/badge/license-MIT-cyan.svg)](LICENSE)
+[![CI](https://github.com/betsyhcamp/xreview/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/betsyhcamp/xreview/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg) [![License: MIT](https://img.shields.io/badge/license-MIT-cyan.svg)](LICENSE)
 
 `xreview` is a Claude Code plugin that runs a code review debate between Claude and Codex, with no copying and pasting between them. You start it from the Claude session that wrote the code, and you stay in that session throughout: at each stop you talk to both reviewers through it, at your desk or from your phone. You decide on the open items that couldn't be resolved during the review. For each open decision, Claude and Codex come up with solutions and rank them independently, and Claude merges them into one ranked set, saying when it's a coin flip or there's genuinely only one good solution. You then finalize a plan, and Claude implements it as a small series of commits.
 
@@ -35,11 +35,11 @@ Session A only carries messages. It never reads the debate or looks into your qu
 In a Claude Code session:
 
 ```text
-/plugin marketplace add betsyhcamp/cross-model-review-loop
-/plugin install xreview@cross-model-review-loop
+/plugin marketplace add betsyhcamp/xreview
+/plugin install xreview@xreview
 ```
 
-**Updates.** The plugin has no version number, so every commit is an update. Third-party marketplaces don't update automatically: run `claude plugin update xreview@cross-model-review-loop`, or turn on auto-update under Marketplaces in `/plugin`.
+**Updates.** The plugin has no version number, so every commit is an update. Third-party marketplaces don't update automatically: run `claude plugin update xreview@xreview`, or turn on auto-update under Marketplaces in `/plugin`.
 
 For other ways to install, see [docs/install.md](docs/install.md) including from your shell or another git host, on a company or regulated computer, or with symlinks instead of the plugin system.
 
@@ -145,7 +145,7 @@ Both reviewers can read all the code and run things to check their claims. Neith
 Each review keeps its files in `.reviews/<name>/`, which is added to `.git/info/exclude`, so nothing is committed. [docs/reference.md](docs/reference.md) lists each file and how `<name>` is chosen.
 
 ## Contributing
-To work on `xreview` itself, see [CONTRIBUTING.md](CONTRIBUTING.md). Planned work is tracked as [enhancement issues](https://github.com/betsyhcamp/cross-model-review-loop/issues?q=is%3Aissue+label%3Aenhancement).
+To work on `xreview` itself, see [CONTRIBUTING.md](CONTRIBUTING.md). Planned work is tracked as [enhancement issues](https://github.com/betsyhcamp/xreview/issues?q=is%3Aissue+label%3Aenhancement).
 
 ## License
 

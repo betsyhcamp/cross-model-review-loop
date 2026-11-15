@@ -7,13 +7,13 @@ This covers working on `xreview` itself. To use it, see the [README](README.md).
 Use a local-folder marketplace, which loads the plugin in place from your clone:
 
 ```text
-/plugin marketplace add /path/to/cross-model-review-loop
-/plugin install xreview@cross-model-review-loop
+/plugin marketplace add /path/to/xreview
+/plugin install xreview@xreview
 ```
 
 - To pick up an edit, restart Claude Code or run `/reload-plugins`. `/clear` doesn't reload a plugin's skill text. A skill already invoked keeps the text it loaded, so check a skill change in a new conversation after reloading.
 - **Don't use `claude --plugin-dir .` in this repository.** Claude Code makes a `--plugin-dir` folder a protected path, so every write in the repository then asks for permission or goes to auto mode's classifier.
-- A marketplace name can be registered only once, and the GitHub and local marketplaces share the name `cross-model-review-loop`. To switch between them, remove one first with `/plugin marketplace remove cross-model-review-loop`, which also uninstalls the plugin, then add the other and install again.
+- A marketplace name can be registered only once, and the GitHub and local marketplaces share the name `xreview`. To switch between them, remove one first with `/plugin marketplace remove xreview`, which also uninstalls the plugin, then add the other and install again.
 
 ## Set up and run the checks
 
