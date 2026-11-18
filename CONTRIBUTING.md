@@ -35,5 +35,6 @@ It runs that interpreter directly with `-I`, not through `uv run`, so files in t
 ## Conventions
 
 - **Commit subjects** start with one tag, `feat:`, `fix:`, `refac:`, `docs:`, `test:` or `chore:`, then a capitalized summary in the imperative, such as `fix: Say to restore the tree after any call that changed it`.
+- **Every merge to `main` is a release.** The PR adds its section to `CHANGELOG.md` and raises `version` in `.claude-plugin/plugin.json`, since GitHub installs update only when it changes.
 - **The runner uses only the standard library,** so it runs on any Python 3.10 or later with nothing to install. pytest, ruff and pre-commit are development-only, in `pyproject.toml`'s dev group.
 - **Python** is formatted with `ruff format`, with lines of at most 79 characters.

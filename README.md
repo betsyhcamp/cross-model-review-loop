@@ -39,7 +39,7 @@ In a Claude Code session:
 /plugin install xreview@xreview
 ```
 
-**Updates.** GitHub installs update only when a release raises the version; [Releases](https://github.com/betsyhcamp/xreview/releases) lists what changed. Third-party marketplaces don't update automatically: run `claude plugin update xreview@xreview`, or turn on auto-update under Marketplaces in `/plugin`.
+**Updates.** GitHub installs update only when a release raises the version; [CHANGELOG.md](CHANGELOG.md) lists what changed, including breaking changes. Third-party marketplaces don't update automatically: run `claude plugin update xreview@xreview`, or turn on auto-update under Marketplaces in `/plugin`.
 
 For other ways to install, see [docs/install.md](docs/install.md) including from your shell or another git host, on a company or regulated computer, or with symlinks instead of the plugin system.
 
