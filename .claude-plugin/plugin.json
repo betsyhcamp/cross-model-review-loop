@@ -1,7 +1,8 @@
 {
   "name": "xreview",
+  "version": "0.3.0",
   "description": "Cross-model code review run from the session that wrote the code: Codex reviews, a separate Claude session rebuts, the same Codex session responds, Claude writes the plan, and both rank the open decisions without seeing each other's ranking. Every exchange is kept in a Markdown transcript.",
   "author": { "name": "Elizabeth H. Camp" },
-  "repository": "https://github.com/betsyhcamp/cross-model-review-loop",
+  "repository": "https://github.com/betsyhcamp/xreview",
   "license": "MIT"
 }

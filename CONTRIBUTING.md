@@ -7,13 +7,13 @@ This covers working on `xreview` itself. To use it, see the [README](README.md).
 Use a local-folder marketplace, which loads the plugin in place from your clone:
 
 ```text
-/plugin marketplace add /path/to/cross-model-review-loop
-/plugin install xreview@cross-model-review-loop
+/plugin marketplace add /path/to/xreview
+/plugin install xreview@xreview
 ```
 
 - To pick up an edit, restart Claude Code or run `/reload-plugins`. `/clear` doesn't reload a plugin's skill text. A skill already invoked keeps the text it loaded, so check a skill change in a new conversation after reloading.
 - **Don't use `claude --plugin-dir .` in this repository.** Claude Code makes a `--plugin-dir` folder a protected path, so every write in the repository then asks for permission or goes to auto mode's classifier.
-- A marketplace name can be registered only once, and the GitHub and local marketplaces share the name `cross-model-review-loop`. To switch between them, remove one first with `/plugin marketplace remove cross-model-review-loop`, which also uninstalls the plugin, then add the other and install again.
+- A marketplace name can be registered only once, and the GitHub and local marketplaces share the name `xreview`. To switch between them, remove one first with `/plugin marketplace remove xreview`, which also uninstalls the plugin, then add the other and install again.
 
 ## Set up and run the checks
 
@@ -35,5 +35,6 @@ It runs that interpreter directly with `-I`, not through `uv run`, so files in t
 ## Conventions
 
 - **Commit subjects** start with one tag, `feat:`, `fix:`, `refac:`, `docs:`, `test:` or `chore:`, then a capitalized summary in the imperative, such as `fix: Say to restore the tree after any call that changed it`.
+- **Every merge to `main` is a release.** The PR adds its section to `CHANGELOG.md` and raises `version` in `.claude-plugin/plugin.json`, since GitHub installs update only when it changes.
 - **The runner uses only the standard library,** so it runs on any Python 3.10 or later with nothing to install. pytest, ruff and pre-commit are development-only, in `pyproject.toml`'s dev group.
 - **Python** is formatted with `ruff format`, with lines of at most 79 characters.
